@@ -9,35 +9,35 @@ Akashic Plugin API v2 插件，用 Bangumi 官方 API 查询收藏、设置“�
 - 所有远端写入先生成包含作品名和目标状态/集数的预览；确认记录单次使用并在 10 分钟后过期。
 - 动画进度使用 `PATCH /v0/users/-/collections/{subject_id}/episodes` 和明确的章节 ID，不用条目级 `ep_status` 修改动画集数。
 
-## 本地安装
+## 安装
 
-Akashic 只安装 Git 已提交快照，因此先确认当前分支已有目标提交。然后从 Akashic 仓库执行：
+Akashic 只安装 Git 已提交快照。从 Akashic 仓库执行：
 
 ```bash
-python main.py plugin-install \
-  --source /Users/lfegg/Documents/GitHub/bangumi-mcp \
-  --marketplace local \
-  --workspace /absolute/path/to/akashic-workspace
+.venv/bin/python main.py plugin-install \
+  --source https://github.com/lfegg/bangumi-mcp.git \
+  --marketplace github
 ```
 
 安装输出会给出数据目录，默认是：
 
 ```text
-<workspace>/plugin-data/bangumi-local/
+<workspace>/plugin-data/bangumi-github/
 ```
+
+登录 Bangumi 后，前往 [Bangumi Access Token 页面](https://next.bgm.tv/demo/access-token) 生成个人 Token。该 Token 是账号的 API 访问凭据，不是 Bangumi 密码。
 
 在该目录创建权限为 `0600` 的 `config.local.toml`：
 
 ```toml
-access_token = "<在本地填写 Bangumi Access Token>"
+access_token = "<在此填写 Bangumi Access Token>"
 user_agent = "lfegg/bangumi-mcp/0.1.0 (https://github.com/lfegg/bangumi-mcp)"
 ```
 
 不要把 Token 放进命令行参数或聊天消息。配置完成后检查：
 
 ```bash
-python main.py plugin-doctor bangumi@local \
-  --workspace /absolute/path/to/akashic-workspace
+.venv/bin/python main.py plugin-doctor bangumi@github
 ```
 
 运行中的 Akashic 会观察配置变化并发布新的 committed generation；新会话会加载 `bangumi` Skill 和 MCP 工具。
