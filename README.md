@@ -25,10 +25,12 @@ Akashic 只安装 Git 已提交快照。从 Akashic 仓库执行：
 <workspace>/plugin-data/bangumi-github/
 ```
 
+登录 Bangumi 后，前往 [Bangumi Access Token 页面](https://next.bgm.tv/demo/access-token) 生成个人 Token。该 Token 是账号的 API 访问凭据，不是 Bangumi 密码。
+
 在该目录创建权限为 `0600` 的 `config.local.toml`：
 
 ```toml
-access_token = "<在本地填写 Bangumi Access Token>"
+access_token = "<在此填写 Bangumi Access Token>"
 user_agent = "lfegg/bangumi-mcp/0.1.0 (https://github.com/lfegg/bangumi-mcp)"
 ```
 
