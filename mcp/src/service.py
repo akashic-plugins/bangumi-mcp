@@ -58,6 +58,9 @@ COLLECTION_STATUS_VALUES = {
     4: "on_hold",
     5: "dropped",
 }
+COLLECTION_DISPLAY_PAGE_SIZE = 10
+COLLECTION_BULK_PAGE_SIZE = 50
+COLLECTION_COMPLETE_LIMIT = 200
 
 SubjectTypeFilter = Literal["all", "book", "anime", "music", "game", "real"]
 CollectionStatusFilter = Literal[
@@ -87,63 +90,161 @@ class BangumiService:
         self,
         subject_type: SubjectTypeFilter = "all",
         status: CollectionStatusFilter = "all",
-        limit: int = 10,
         offset: int = 0,
     ) -> dict[str, object]:
-        """查询当前用户的一页收藏，并返回有界摘要。"""
+        """查询当前用户的一页收藏，展示页固定为 10 条。"""
 
-        api_subject_type = _filter_value(
-            subject_type,
-            SUBJECT_TYPE_FILTERS,
-            "subject_type",
+        api_subject_type, api_status = _collection_filter_values(
+            subject_type, status
         )
-        api_status = _filter_value(status, COLLECTION_STATUS_FILTERS, "status")
-        limit = _bounded_int(limit, "limit", minimum=1, maximum=50)
         offset = _bounded_int(offset, "offset", minimum=0)
         username = _username(self._client.get_me())
-        page = self._client.list_collections(
+        page = self._read_collection_page(
             username,
             subject_type=api_subject_type,
-            collection_type=api_status,
+            status=api_status,
+            limit=COLLECTION_DISPLAY_PAGE_SIZE,
+            offset=offset,
+        )
+        total = page["total"]
+        returned = len(page["collections"])
+        has_more = offset + returned < total
+        return {
+            "user": {"username": username},
+            "filters": _collection_filters(subject_type, status),
+            "page": {
+                "total": total,
+                "limit": COLLECTION_DISPLAY_PAGE_SIZE,
+                "offset": offset,
+                "returned": returned,
+                "has_more": has_more,
+                "next_offset": offset + returned if has_more else None,
+            },
+            "collections": page["collections"],
+        }
+
+    def count_collections(
+        self,
+        subject_type: SubjectTypeFilter = "all",
+        status: CollectionStatusFilter = "all",
+    ) -> dict[str, object]:
+        """只读取当前用户收藏数量，不扫描全部条目。"""
+
+        api_subject_type, api_status = _collection_filter_values(
+            subject_type, status
+        )
+        username = _username(self._client.get_me())
+        page = self._read_collection_page(
+            username,
+            subject_type=api_subject_type,
+            status=api_status,
+            limit=1,
+            offset=0,
+        )
+        return {
+            "user": {"username": username},
+            "filters": _collection_filters(subject_type, status),
+            "total": page["total"],
+        }
+
+    def list_all_collections(
+        self,
+        subject_type: SubjectTypeFilter = "all",
+        status: CollectionStatusFilter = "all",
+    ) -> dict[str, object]:
+        """按 50 条分页完整读取已明确请求的全部收藏。"""
+
+        api_subject_type, api_status = _collection_filter_values(
+            subject_type, status
+        )
+        username = _username(self._client.get_me())
+        expected_total: int | None = None
+        offset = 0
+        request_count = 0
+        collections: list[dict[str, object]] = []
+        subject_ids: set[int] = set()
+        while expected_total is None or offset < expected_total:
+            page = self._read_collection_page(
+                username,
+                subject_type=api_subject_type,
+                status=api_status,
+                limit=COLLECTION_BULK_PAGE_SIZE,
+                offset=offset,
+            )
+            request_count += 1
+            total = page["total"]
+            if total > COLLECTION_COMPLETE_LIMIT:
+                raise BangumiInputError(
+                    f"收藏共 {total} 条，超过完整读取上限 "
+                    f"{COLLECTION_COMPLETE_LIMIT} 条；请缩小作品类型或收藏状态范围"
+                )
+            if expected_total is None:
+                expected_total = total
+            elif total != expected_total:
+                raise BangumiApiError("Bangumi 收藏总数在完整读取期间发生变化")
+            page_items = page["collections"]
+            for item in page_items:
+                subject = item["subject"]
+                if not isinstance(subject, dict):
+                    raise BangumiApiError("Bangumi 收藏条目缺少 subject")
+                subject_id = subject.get("id")
+                if not isinstance(subject_id, int) or isinstance(subject_id, bool):
+                    raise BangumiApiError("Bangumi 收藏条目 subject id 无效")
+                if subject_id in subject_ids:
+                    raise BangumiApiError("Bangumi 收藏完整读取出现重复条目")
+                subject_ids.add(subject_id)
+            collections.extend(page_items)
+            offset += len(page_items)
+
+        if expected_total is None or len(collections) != expected_total:
+            raise BangumiApiError("Bangumi 收藏完整读取条目数不匹配")
+        return {
+            "user": {"username": username},
+            "filters": _collection_filters(subject_type, status),
+            "complete": True,
+            "total": expected_total,
+            "returned": len(collections),
+            "api_page_size": COLLECTION_BULK_PAGE_SIZE,
+            "request_count": request_count,
+            "collections": collections,
+        }
+
+    def _read_collection_page(
+        self,
+        username: str,
+        *,
+        subject_type: int | None,
+        status: int | None,
+        limit: int,
+        offset: int,
+    ) -> dict[str, Any]:
+        page = self._client.list_collections(
+            username,
+            subject_type=subject_type,
+            collection_type=status,
             limit=limit,
             offset=offset,
         )
         total = _api_int(page.get("total"), "收藏分页 total", minimum=0)
         response_limit = _api_int(
-            page.get("limit"),
-            "收藏分页 limit",
-            minimum=1,
-            maximum=50,
+            page.get("limit"), "收藏分页 limit", minimum=1, maximum=50
         )
         response_offset = _api_int(
-            page.get("offset"),
-            "收藏分页 offset",
-            minimum=0,
+            page.get("offset"), "收藏分页 offset", minimum=0
         )
+        if response_limit != limit or response_offset != offset:
+            raise BangumiApiError("Bangumi 收藏分页参数与请求不匹配")
         raw_items = page.get("data")
         if not isinstance(raw_items, list):
             raise BangumiApiError("Bangumi 收藏分页 data 不是数组")
-        items = [_collection_list_item(item) for item in raw_items]
-        returned = len(items)
-        if returned == 0 and response_offset < total:
+        collections = [_collection_list_item(item) for item in raw_items]
+        if len(collections) > limit:
+            raise BangumiApiError("Bangumi 收藏分页返回条目超过 limit")
+        if collections and offset + len(collections) > total:
+            raise BangumiApiError("Bangumi 收藏分页条目超过 total")
+        if not collections and offset < total:
             raise BangumiApiError("Bangumi 收藏分页提前结束")
-        has_more = response_offset + returned < total
-        return {
-            "user": {"username": username},
-            "filters": {
-                "subject_type": subject_type,
-                "status": status,
-            },
-            "page": {
-                "total": total,
-                "limit": response_limit,
-                "offset": response_offset,
-                "returned": returned,
-                "has_more": has_more,
-                "next_offset": response_offset + returned if has_more else None,
-            },
-            "collections": items,
-        }
+        return {"total": total, "collections": collections}
 
     def get_collection_status(self, subject_id: int) -> dict[str, object]:
         """查询作品、收藏状态和逐集动画进度。"""
@@ -390,6 +491,23 @@ def _filter_value(
         allowed = "、".join(mapping)
         raise BangumiInputError(f"{label} 只支持 {allowed}")
     return mapping[value]
+
+
+def _collection_filter_values(
+    subject_type: SubjectTypeFilter,
+    status: CollectionStatusFilter,
+) -> tuple[int | None, int | None]:
+    return (
+        _filter_value(subject_type, SUBJECT_TYPE_FILTERS, "subject_type"),
+        _filter_value(status, COLLECTION_STATUS_FILTERS, "status"),
+    )
+
+
+def _collection_filters(
+    subject_type: SubjectTypeFilter,
+    status: CollectionStatusFilter,
+) -> dict[str, str]:
+    return {"subject_type": subject_type, "status": status}
 
 
 def _subject_identity(subject: dict[str, Any], subject_id: int) -> dict[str, object]:

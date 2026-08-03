@@ -6,7 +6,7 @@ from agent.plugins import McpServerSpec, Plugin
 
 
 DEFAULT_USER_AGENT = (
-    "akashic-plugins/bangumi-mcp/0.2.1 "
+    "akashic-plugins/bangumi-mcp/0.3.0 "
     "(https://github.com/akashic-plugins/bangumi-mcp)"
 )
 
@@ -19,7 +19,7 @@ class BangumiConfig(BaseModel):
 class BangumiPlugin(Plugin):
     api_version = 2
     name = "bangumi"
-    version = "0.2.1"
+    version = "0.3.0"
     desc = "查询 Bangumi 收藏列表，并安全更新收藏和动画观看进度"
     author = "lfegg"
     ConfigModel = BangumiConfig

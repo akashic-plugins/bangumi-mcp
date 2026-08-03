@@ -77,6 +77,7 @@ class FakeClient:
             "offset": 0,
             "data": [collection_item(42)],
         }
+        self.collection_pages: list[dict[str, Any]] = []
         self.get_me_calls = 0
         self.subject_reads = 0
         self.episode_reads = 0
@@ -112,6 +113,8 @@ class FakeClient:
                 "offset": offset,
             }
         )
+        if self.collection_pages:
+            return deepcopy(self.collection_pages.pop(0))
         return deepcopy(self.collection_page)
 
     def get_collection(
@@ -196,11 +199,40 @@ def test_collection_list_defaults_to_ten_and_returns_bounded_summary() -> None:
     assert client.episode_reads == 0
 
 
+def test_ordinary_list_returns_only_first_10_of_24_items() -> None:
+    client = FakeClient()
+    client.collection_page = {
+        "total": 24,
+        "limit": 10,
+        "offset": 0,
+        "data": [
+            collection_item(subject_id, collection_type=4)
+            for subject_id in range(1, 11)
+        ],
+    }
+
+    result = service(client).list_collections(
+        subject_type="anime",
+        status="on_hold",
+    )
+
+    assert result["page"] == {
+        "total": 24,
+        "limit": 10,
+        "offset": 0,
+        "returned": 10,
+        "has_more": True,
+        "next_offset": 10,
+    }
+    assert len(result["collections"]) == 10
+    assert client.list_collection_calls[0]["limit"] == 10
+
+
 def test_collection_list_maps_filters_and_preserves_missing_subject() -> None:
     client = FakeClient()
     client.collection_page = {
         "total": 12,
-        "limit": 1,
+        "limit": 10,
         "offset": 10,
         "data": [collection_item(99, include_subject=False)],
     }
@@ -208,14 +240,13 @@ def test_collection_list_maps_filters_and_preserves_missing_subject() -> None:
     result = service(client).list_collections(
         subject_type="anime",
         status="watching",
-        limit=1,
         offset=10,
     )
 
     assert client.list_collection_calls[0] == {
         "subject_type": 2,
         "collection_type": 3,
-        "limit": 1,
+        "limit": 10,
         "offset": 10,
     }
     assert result["page"]["has_more"] is True
@@ -285,9 +316,6 @@ def test_collection_list_maps_each_status(status: str, api_value: int) -> None:
     [
         {"subject_type": "invalid"},
         {"status": "invalid"},
-        {"limit": 0},
-        {"limit": 51},
-        {"limit": True},
         {"offset": -1},
         {"offset": False},
     ],
@@ -333,6 +361,129 @@ def test_collection_list_accepts_empty_page_beyond_total() -> None:
         "has_more": False,
         "next_offset": None,
     }
+
+
+def test_collection_count_reads_one_item_only() -> None:
+    client = FakeClient()
+    client.collection_page = {
+        "total": 24,
+        "limit": 1,
+        "offset": 0,
+        "data": [collection_item(1, collection_type=4)],
+    }
+
+    result = service(client).count_collections(
+        subject_type="anime",
+        status="on_hold",
+    )
+
+    assert result == {
+        "user": {"username": "tester"},
+        "filters": {"subject_type": "anime", "status": "on_hold"},
+        "total": 24,
+    }
+    assert client.list_collection_calls == [
+        {
+            "subject_type": 2,
+            "collection_type": 4,
+            "limit": 1,
+            "offset": 0,
+        }
+    ]
+
+
+def test_explicit_all_returns_all_24_items_in_one_batch() -> None:
+    client = FakeClient()
+    client.collection_page = {
+        "total": 24,
+        "limit": 50,
+        "offset": 0,
+        "data": [
+            collection_item(subject_id, collection_type=4)
+            for subject_id in range(1, 25)
+        ],
+    }
+
+    result = service(client).list_all_collections(
+        subject_type="anime",
+        status="on_hold",
+    )
+
+    assert result["complete"] is True
+    assert result["total"] == 24
+    assert result["returned"] == 24
+    assert result["api_page_size"] == 50
+    assert result["request_count"] == 1
+    assert len(result["collections"]) == 24
+    assert client.list_collection_calls == [
+        {
+            "subject_type": 2,
+            "collection_type": 4,
+            "limit": 50,
+            "offset": 0,
+        }
+    ]
+
+
+def test_explicit_all_reads_multiple_50_item_batches() -> None:
+    client = FakeClient()
+    client.collection_pages = [
+        {
+            "total": 120,
+            "limit": 50,
+            "offset": offset,
+            "data": [
+                collection_item(subject_id)
+                for subject_id in range(offset + 1, offset + count + 1)
+            ],
+        }
+        for offset, count in ((0, 50), (50, 50), (100, 20))
+    ]
+
+    result = service(client).list_all_collections(status="watching")
+
+    assert result["complete"] is True
+    assert result["total"] == 120
+    assert result["returned"] == 120
+    assert result["request_count"] == 3
+    assert [call["offset"] for call in client.list_collection_calls] == [0, 50, 100]
+    assert all(call["limit"] == 50 for call in client.list_collection_calls)
+
+
+def test_explicit_all_rejects_total_over_safe_limit() -> None:
+    client = FakeClient()
+    client.collection_page = {
+        "total": 201,
+        "limit": 50,
+        "offset": 0,
+        "data": [collection_item(subject_id) for subject_id in range(1, 51)],
+    }
+
+    with pytest.raises(BangumiInputError, match="201.*200"):
+        service(client).list_all_collections()
+
+    assert len(client.list_collection_calls) == 1
+
+
+def test_explicit_all_rejects_total_drift_between_batches() -> None:
+    client = FakeClient()
+    client.collection_pages = [
+        {
+            "total": 75,
+            "limit": 50,
+            "offset": 0,
+            "data": [collection_item(subject_id) for subject_id in range(1, 51)],
+        },
+        {
+            "total": 74,
+            "limit": 50,
+            "offset": 50,
+            "data": [collection_item(subject_id) for subject_id in range(51, 75)],
+        },
+    ]
+
+    with pytest.raises(BangumiApiError, match="总数.*发生变化"):
+        service(client).list_all_collections()
 
 
 def test_query_distinguishes_highest_and_contiguous_progress() -> None:
