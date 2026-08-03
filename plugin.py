@@ -6,7 +6,7 @@ from agent.plugins import McpServerSpec, Plugin
 
 
 DEFAULT_USER_AGENT = (
-    "lfegg/bangumi-mcp/0.1.0 (https://github.com/lfegg/bangumi-mcp)"
+    "lfegg/bangumi-mcp/0.2.0 (https://github.com/lfegg/bangumi-mcp)"
 )
 
 
@@ -18,8 +18,8 @@ class BangumiConfig(BaseModel):
 class BangumiPlugin(Plugin):
     api_version = 2
     name = "bangumi"
-    version = "0.1.0"
-    desc = "查询并安全更新 Bangumi 收藏和动画观看进度"
+    version = "0.2.0"
+    desc = "查询 Bangumi 收藏列表，并安全更新收藏和动画观看进度"
     author = "lfegg"
     ConfigModel = BangumiConfig
 

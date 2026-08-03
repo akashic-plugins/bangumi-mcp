@@ -9,7 +9,7 @@ from mcp.server.fastmcp import FastMCP
 from .client import BangumiClient
 from .config import load_runtime_config
 from .confirmation import ConfirmationStore
-from .service import BangumiService
+from .service import BangumiService, CollectionStatusFilter, SubjectTypeFilter
 
 
 def create_mcp_server(data_dir: Path) -> FastMCP:
@@ -25,6 +25,24 @@ def create_mcp_server(data_dir: Path) -> FastMCP:
         """查询指定 Bangumi 条目的收藏状态及动画逐集观看进度。"""
 
         return _json(service().get_collection_status(subject_id))
+
+    @mcp.tool()
+    def list_collections(
+        subject_type: SubjectTypeFilter = "all",
+        status: CollectionStatusFilter = "all",
+        limit: int = 10,
+        offset: int = 0,
+    ) -> str:
+        """分页查询当前 Token 用户收藏；只读，默认 10 条。"""
+
+        return _json(
+            service().list_collections(
+                subject_type=subject_type,
+                status=status,
+                limit=limit,
+                offset=offset,
+            )
+        )
 
     @mcp.tool()
     def prepare_collection_status_update(

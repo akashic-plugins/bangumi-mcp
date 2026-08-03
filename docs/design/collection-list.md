@@ -1,6 +1,6 @@
 # 用户收藏列表设计
 
-- 状态：Proposed
+- 状态：Accepted
 - 目标版本：`0.2.0`
 - 日期：2026-08-03
 - 依据：[Bangumi 官方 API 文档](https://bangumi.github.io/api/) 与 [OpenAPI 定义](https://bangumi.github.io/api/dist.json)

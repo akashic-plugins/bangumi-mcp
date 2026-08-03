@@ -63,6 +63,63 @@ class BangumiClient:
             return None
         return self._object(payload, "收藏")
 
+    def list_collections(
+        self,
+        username: str,
+        *,
+        subject_type: int | None = None,
+        collection_type: int | None = None,
+        limit: int = 10,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """读取一页用户收藏，不自动追逐后续分页。"""
+
+        _request_int(limit, "limit", minimum=1, maximum=50)
+        _request_int(offset, "offset", minimum=0)
+        params: dict[str, object] = {"limit": limit, "offset": offset}
+        if subject_type is not None:
+            params["subject_type"] = subject_type
+        if collection_type is not None:
+            params["type"] = collection_type
+
+        encoded_username = quote(username, safe="")
+        payload = self._object(
+            self._request_json(
+                "GET",
+                f"/v0/users/{encoded_username}/collections",
+                params=params,
+            ),
+            "收藏分页",
+        )
+        total = _response_int(payload.get("total"), "收藏分页 total", minimum=0)
+        response_limit = _response_int(
+            payload.get("limit"),
+            "收藏分页 limit",
+            minimum=1,
+            maximum=50,
+        )
+        response_offset = _response_int(
+            payload.get("offset"),
+            "收藏分页 offset",
+            minimum=0,
+        )
+        data = payload.get("data")
+        if not isinstance(data, list):
+            raise BangumiApiError("Bangumi 收藏分页 data 不是数组")
+        items = [self._object(item, "收藏分页条目") for item in data]
+        if response_limit != limit or response_offset != offset:
+            raise BangumiApiError("Bangumi 收藏分页参数与请求不匹配")
+        if len(items) > response_limit:
+            raise BangumiApiError("Bangumi 收藏分页返回条目超过 limit")
+        if items and response_offset + len(items) > total:
+            raise BangumiApiError("Bangumi 收藏分页条目超过 total")
+        return {
+            "total": total,
+            "limit": response_limit,
+            "offset": response_offset,
+            "data": items,
+        }
+
     def list_episode_collections(
         self,
         subject_id: int,
@@ -193,3 +250,40 @@ class BangumiClient:
         if not isinstance(value, dict):
             raise BangumiApiError(f"Bangumi {label}不是对象")
         return value
+
+
+def _request_int(
+    value: object,
+    label: str,
+    *,
+    minimum: int,
+    maximum: int | None = None,
+) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{label} 必须是整数")
+    if value < minimum or (maximum is not None and value > maximum):
+        bounds = (
+            f"{minimum} 至 {maximum}"
+            if maximum is not None
+            else f"至少 {minimum}"
+        )
+        raise ValueError(f"{label} 必须为 {bounds}")
+    return value
+
+
+def _response_int(
+    value: object,
+    label: str,
+    *,
+    minimum: int,
+    maximum: int | None = None,
+) -> int:
+    try:
+        return _request_int(
+            value,
+            label,
+            minimum=minimum,
+            maximum=maximum,
+        )
+    except ValueError as error:
+        raise BangumiApiError(str(error)) from None

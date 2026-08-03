@@ -14,6 +14,7 @@ def test_runtime_config_keeps_token_out_of_repr(tmp_path) -> None:
     config = load_runtime_config(tmp_path)
 
     assert config.access_token == "private-value"
+    assert "bangumi-mcp/0.2.0" in config.user_agent
     assert "private-value" not in repr(config)
 
 
