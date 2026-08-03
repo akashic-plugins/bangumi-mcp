@@ -42,6 +42,10 @@ user_agent = "lfegg/bangumi-mcp/0.1.0 (https://github.com/lfegg/bangumi-mcp)"
 
 运行中的 Akashic 会观察配置变化并发布新的 committed generation；新会话会加载 `bangumi` Skill 和 MCP 工具。
 
+## 设计文档
+
+- [用户收藏列表设计](docs/design/collection-list.md)
+
 ## 开发验证
 
 ```bash
