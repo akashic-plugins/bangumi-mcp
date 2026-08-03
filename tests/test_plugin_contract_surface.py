@@ -25,7 +25,7 @@ def test_plugin_declares_v2_mcp_and_skill_roots() -> None:
 
     assert assignments["api_version"] == 2
     assert assignments["name"] == "bangumi"
-    assert assignments["version"] == "0.1.0"
+    assert assignments["version"] == "0.2.0"
     assert all(
         not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
         or item.name != "initialize"

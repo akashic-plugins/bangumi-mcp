@@ -28,6 +28,46 @@ STATUS_TARGETS = {
     "watching": (3, "在看"),
     "completed": (2, "看过"),
 }
+SUBJECT_TYPE_FILTERS = {
+    "all": None,
+    "book": 1,
+    "anime": 2,
+    "music": 3,
+    "game": 4,
+    "real": 6,
+}
+SUBJECT_TYPE_VALUES = {
+    1: "book",
+    2: "anime",
+    3: "music",
+    4: "game",
+    6: "real",
+}
+COLLECTION_STATUS_FILTERS = {
+    "all": None,
+    "wish": 1,
+    "completed": 2,
+    "watching": 3,
+    "on_hold": 4,
+    "dropped": 5,
+}
+COLLECTION_STATUS_VALUES = {
+    1: "wish",
+    2: "completed",
+    3: "watching",
+    4: "on_hold",
+    5: "dropped",
+}
+
+SubjectTypeFilter = Literal["all", "book", "anime", "music", "game", "real"]
+CollectionStatusFilter = Literal[
+    "all",
+    "wish",
+    "completed",
+    "watching",
+    "on_hold",
+    "dropped",
+]
 
 
 class BangumiInputError(ValueError):
@@ -42,6 +82,68 @@ class BangumiService:
     ) -> None:
         self._client = client
         self._confirmations = confirmations
+
+    def list_collections(
+        self,
+        subject_type: SubjectTypeFilter = "all",
+        status: CollectionStatusFilter = "all",
+        limit: int = 10,
+        offset: int = 0,
+    ) -> dict[str, object]:
+        """查询当前用户的一页收藏，并返回有界摘要。"""
+
+        api_subject_type = _filter_value(
+            subject_type,
+            SUBJECT_TYPE_FILTERS,
+            "subject_type",
+        )
+        api_status = _filter_value(status, COLLECTION_STATUS_FILTERS, "status")
+        limit = _bounded_int(limit, "limit", minimum=1, maximum=50)
+        offset = _bounded_int(offset, "offset", minimum=0)
+        username = _username(self._client.get_me())
+        page = self._client.list_collections(
+            username,
+            subject_type=api_subject_type,
+            collection_type=api_status,
+            limit=limit,
+            offset=offset,
+        )
+        total = _api_int(page.get("total"), "收藏分页 total", minimum=0)
+        response_limit = _api_int(
+            page.get("limit"),
+            "收藏分页 limit",
+            minimum=1,
+            maximum=50,
+        )
+        response_offset = _api_int(
+            page.get("offset"),
+            "收藏分页 offset",
+            minimum=0,
+        )
+        raw_items = page.get("data")
+        if not isinstance(raw_items, list):
+            raise BangumiApiError("Bangumi 收藏分页 data 不是数组")
+        items = [_collection_list_item(item) for item in raw_items]
+        returned = len(items)
+        if returned == 0 and response_offset < total:
+            raise BangumiApiError("Bangumi 收藏分页提前结束")
+        has_more = response_offset + returned < total
+        return {
+            "user": {"username": username},
+            "filters": {
+                "subject_type": subject_type,
+                "status": status,
+            },
+            "page": {
+                "total": total,
+                "limit": response_limit,
+                "offset": response_offset,
+                "returned": returned,
+                "has_more": has_more,
+                "next_offset": response_offset + returned if has_more else None,
+            },
+            "collections": items,
+        }
 
     def get_collection_status(self, subject_id: int) -> dict[str, object]:
         """查询作品、收藏状态和逐集动画进度。"""
@@ -260,6 +362,36 @@ def _positive_int(value: object, label: str) -> int:
     return value
 
 
+def _bounded_int(
+    value: object,
+    label: str,
+    *,
+    minimum: int,
+    maximum: int | None = None,
+) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise BangumiInputError(f"{label} 必须是整数")
+    if value < minimum or (maximum is not None and value > maximum):
+        bounds = (
+            f"{minimum} 至 {maximum}"
+            if maximum is not None
+            else f"至少 {minimum}"
+        )
+        raise BangumiInputError(f"{label} 必须为 {bounds}")
+    return value
+
+
+def _filter_value(
+    value: object,
+    mapping: dict[str, int | None],
+    label: str,
+) -> int | None:
+    if not isinstance(value, str) or value not in mapping:
+        allowed = "、".join(mapping)
+        raise BangumiInputError(f"{label} 只支持 {allowed}")
+    return mapping[value]
+
+
 def _subject_identity(subject: dict[str, Any], subject_id: int) -> dict[str, object]:
     actual_id = subject.get("id")
     if actual_id != subject_id:
@@ -298,6 +430,121 @@ def _collection_status(collection: dict[str, Any] | None) -> dict[str, object] |
         "type": collection_type,
         "label": COLLECTION_TYPES.get(collection_type, "未知"),
     }
+
+
+def _collection_list_item(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise BangumiApiError("Bangumi 收藏分页条目不是对象")
+    subject_id = _api_int(value.get("subject_id"), "收藏 subject_id", minimum=1)
+    subject_type = _api_enum(
+        value.get("subject_type"),
+        SUBJECT_TYPE_VALUES,
+        "收藏 subject_type",
+    )
+    collection_type = _api_enum(
+        value.get("type"),
+        COLLECTION_STATUS_VALUES,
+        "收藏 type",
+    )
+    rating = _api_int(value.get("rate"), "收藏 rate", minimum=0, maximum=10)
+    episode_progress = _api_int(
+        value.get("ep_status"),
+        "收藏 ep_status",
+        minimum=0,
+    )
+    volume_progress = _api_int(
+        value.get("vol_status"),
+        "收藏 vol_status",
+        minimum=0,
+    )
+    private = value.get("private")
+    if not isinstance(private, bool):
+        raise BangumiApiError("Bangumi 收藏 private 不是布尔值")
+    updated_at = value.get("updated_at")
+    if not isinstance(updated_at, str) or not updated_at.strip():
+        raise BangumiApiError("Bangumi 收藏 updated_at 无效")
+
+    title: str | None = None
+    episodes: int | None = None
+    volumes: int | None = None
+    subject = value.get("subject")
+    if subject is not None:
+        if not isinstance(subject, dict):
+            raise BangumiApiError("Bangumi 收藏 subject 不是对象")
+        if subject.get("id") != subject_id:
+            raise BangumiApiError("Bangumi 收藏 subject ID 不匹配")
+        if subject.get("type") != subject_type:
+            raise BangumiApiError("Bangumi 收藏 subject 类型不匹配")
+        title = _optional_subject_title(subject)
+        episodes = _api_int(subject.get("eps"), "收藏 subject eps", minimum=0)
+        volumes = _api_int(
+            subject.get("volumes"),
+            "收藏 subject volumes",
+            minimum=0,
+        )
+
+    return {
+        "subject": {
+            "id": subject_id,
+            "title": title,
+            "type": subject_type,
+            "type_value": SUBJECT_TYPE_VALUES[subject_type],
+            "type_label": SUBJECT_TYPES[subject_type],
+            "episodes": episodes,
+            "volumes": volumes,
+        },
+        "collection": {
+            "type": collection_type,
+            "status": COLLECTION_STATUS_VALUES[collection_type],
+            "status_label": COLLECTION_TYPES[collection_type],
+            "rating": rating,
+            "reported_episode_progress": episode_progress,
+            "reported_volume_progress": volume_progress,
+            "private": private,
+            "updated_at": updated_at.strip(),
+        },
+    }
+
+
+def _api_int(
+    value: object,
+    label: str,
+    *,
+    minimum: int,
+    maximum: int | None = None,
+) -> int:
+    try:
+        return _bounded_int(
+            value,
+            label,
+            minimum=minimum,
+            maximum=maximum,
+        )
+    except BangumiInputError as error:
+        raise BangumiApiError(str(error)) from None
+
+
+def _api_enum(
+    value: object,
+    mapping: dict[int, str],
+    label: str,
+) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value not in mapping:
+        raise BangumiApiError(f"Bangumi {label} 无效")
+    return value
+
+
+def _optional_subject_title(subject: dict[str, Any]) -> str | None:
+    name_cn = subject.get("name_cn")
+    name = subject.get("name")
+    if name_cn is not None and not isinstance(name_cn, str):
+        raise BangumiApiError("Bangumi 收藏 subject name_cn 无效")
+    if name is not None and not isinstance(name, str):
+        raise BangumiApiError("Bangumi 收藏 subject name 无效")
+    raw_title = name_cn if isinstance(name_cn, str) and name_cn.strip() else name
+    if not isinstance(raw_title, str) or not raw_title.strip():
+        return None
+    return " ".join(raw_title.split())[:160]
 
 
 def _episode_payload(item: dict[str, Any]) -> dict[str, Any]:

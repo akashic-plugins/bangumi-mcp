@@ -1,6 +1,6 @@
 # bangumi-mcp
 
-Akashic Plugin API v2 插件，用 Bangumi 官方 API 查询收藏、设置“在看/看过”，并通过章节接口逐集更新动画观看进度。
+Akashic Plugin API v2 插件，用 Bangumi 官方 API 分页查询收藏列表、查询单个条目的准确进度、设置“在看/看过”，并通过章节接口逐集更新动画观看进度。
 
 ## 安全边界
 
@@ -31,7 +31,7 @@ Akashic 只安装 Git 已提交快照。从 Akashic 仓库执行：
 
 ```toml
 access_token = "<在此填写 Bangumi Access Token>"
-user_agent = "lfegg/bangumi-mcp/0.1.0 (https://github.com/lfegg/bangumi-mcp)"
+user_agent = "lfegg/bangumi-mcp/0.2.0 (https://github.com/lfegg/bangumi-mcp)"
 ```
 
 不要把 Token 放进命令行参数或聊天消息。配置完成后检查：
@@ -41,6 +41,10 @@ user_agent = "lfegg/bangumi-mcp/0.1.0 (https://github.com/lfegg/bangumi-mcp)"
 ```
 
 运行中的 Akashic 会观察配置变化并发布新的 committed generation；新会话会加载 `bangumi` Skill 和 MCP 工具。
+
+## 设计文档
+
+- [用户收藏列表设计](docs/design/collection-list.md)
 
 ## 开发验证
 

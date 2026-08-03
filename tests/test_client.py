@@ -33,10 +33,103 @@ def client(session: FakeSession, token: str = "secret-token") -> BangumiClient:
     return BangumiClient(
         BangumiRuntimeConfig(
             access_token=token,
-            user_agent="lfegg/bangumi-mcp/0.1.0 (https://example.test)",
+            user_agent="lfegg/bangumi-mcp/0.2.0 (https://example.test)",
         ),
         session=session,
     )
+
+
+def test_collection_list_reads_one_page_with_filters() -> None:
+    payload = {
+        "total": 21,
+        "limit": 10,
+        "offset": 10,
+        "data": [{"subject_id": 42}],
+    }
+    session = FakeSession(FakeResponse(200, payload))
+
+    result = client(session).list_collections(
+        "tester/name",
+        subject_type=2,
+        collection_type=3,
+        limit=10,
+        offset=10,
+    )
+
+    assert result == payload
+    assert session.calls[0]["method"] == "GET"
+    assert session.calls[0]["url"].endswith(
+        "/v0/users/tester%2Fname/collections"
+    )
+    assert session.calls[0]["params"] == {
+        "subject_type": 2,
+        "type": 3,
+        "limit": 10,
+        "offset": 10,
+    }
+
+
+def test_collection_list_omits_optional_filters() -> None:
+    session = FakeSession(
+        FakeResponse(
+            200,
+            {"total": 0, "limit": 10, "offset": 0, "data": []},
+        )
+    )
+
+    client(session).list_collections("tester")
+
+    assert session.calls[0]["params"] == {"limit": 10, "offset": 0}
+
+
+def test_collection_list_accepts_empty_page_beyond_total() -> None:
+    session = FakeSession(
+        FakeResponse(
+            200,
+            {"total": 5, "limit": 10, "offset": 10, "data": []},
+        )
+    )
+
+    result = client(session).list_collections("tester", offset=10)
+
+    assert result["data"] == []
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"total": True, "limit": 10, "offset": 0, "data": []},
+        {"total": 0, "limit": 51, "offset": 0, "data": []},
+        {"total": 0, "limit": 10, "offset": -1, "data": []},
+        {"total": 0, "limit": 10, "offset": 0, "data": {}},
+        {"total": 1, "limit": 10, "offset": 0, "data": [1]},
+        {"total": 0, "limit": 20, "offset": 0, "data": []},
+    ],
+)
+def test_collection_list_rejects_invalid_pages(payload: object) -> None:
+    session = FakeSession(FakeResponse(200, payload))
+
+    with pytest.raises(BangumiApiError):
+        client(session).list_collections("tester")
+
+
+@pytest.mark.parametrize(
+    ("limit", "offset"),
+    [(0, 0), (51, 0), (True, 0), (10, -1), (10, False)],
+)
+def test_collection_list_rejects_invalid_request_pagination(
+    limit: object,
+    offset: object,
+) -> None:
+    session = FakeSession()
+
+    with pytest.raises(ValueError):
+        client(session).list_collections(  # type: ignore[arg-type]
+            "tester",
+            limit=limit,
+            offset=offset,
+        )
+    assert session.calls == []
 
 
 def test_status_write_only_sends_collection_type() -> None:
@@ -51,7 +144,7 @@ def test_status_write_only_sends_collection_type() -> None:
             "headers": {
                 "Accept": "application/json",
                 "Authorization": "Bearer secret-token",
-                "User-Agent": "lfegg/bangumi-mcp/0.1.0 (https://example.test)",
+                "User-Agent": "lfegg/bangumi-mcp/0.2.0 (https://example.test)",
             },
             "params": None,
             "json": {"type": 3},
