@@ -53,7 +53,7 @@ GET /v0/users/{username}/collections
 |---|---|---|
 | `subject_type` | 可选，`1/2/3/4/6` | 书籍、动画、音乐、游戏、三次元 |
 | `type` | 可选，`1` 至 `5` | 想看、看过、在看、搁置、抛弃 |
-| `limit` | `1` 至 `50`，官方默认 `30` | 插件默认 `20`，最大 `50` |
+| `limit` | `1` 至 `50`，官方默认 `30` | 插件默认 `10`，最大 `50` |
 | `offset` | 大于等于 `0` | 插件默认 `0` |
 
 响应为 `Paged_UserCollection`：
@@ -61,7 +61,7 @@ GET /v0/users/{username}/collections
 ```json
 {
   "total": 120,
-  "limit": 20,
+  "limit": 10,
   "offset": 0,
   "data": []
 }
@@ -83,7 +83,7 @@ list_collections(
     status: Literal[
         "all", "wish", "completed", "watching", "on_hold", "dropped"
     ] = "all",
-    limit: int = 20,
+    limit: int = 10,
     offset: int = 0,
 ) -> str
 ```
@@ -118,11 +118,11 @@ list_collections(
   },
   "page": {
     "total": 12,
-    "limit": 20,
+    "limit": 10,
     "offset": 0,
-    "returned": 12,
-    "has_more": false,
-    "next_offset": null
+    "returned": 10,
+    "has_more": true,
+    "next_offset": 10
   },
   "collections": [
     {
@@ -163,7 +163,7 @@ list_collections(
 
 工具每次只发起一页收藏请求，不在 MCP 层自动追逐所有分页：
 
-- 默认 `limit=20`。
+- 默认 `limit=10`。
 - 最大 `limit=50`，与官方合同一致。
 - `has_more` 根据 `offset + returned < total` 计算。
 - 有下一页时，`next_offset = offset + returned`。
