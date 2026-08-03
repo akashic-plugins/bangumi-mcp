@@ -31,7 +31,7 @@ Akashic 只安装 Git 已提交快照。从 Akashic 仓库执行：
 
 ```toml
 access_token = "<在此填写 Bangumi Access Token>"
-user_agent = "akashic-plugins/bangumi-mcp/0.2.1 (https://github.com/akashic-plugins/bangumi-mcp)"
+user_agent = "akashic-plugins/bangumi-mcp/0.3.0 (https://github.com/akashic-plugins/bangumi-mcp)"
 ```
 
 已安装旧版本的用户如果在本地配置中显式设置了 `user_agent`，更新插件后也需要将其改为上述新标识。不要把 Token 放进命令行参数或聊天消息。配置完成后检查：
@@ -45,6 +45,7 @@ user_agent = "akashic-plugins/bangumi-mcp/0.2.1 (https://github.com/akashic-plug
 ## 设计文档
 
 - [用户收藏列表设计](docs/design/collection-list.md)
+- [收藏查询意图与展示边界](docs/design/collection-query-intent.md)
 
 ## 开发验证
 

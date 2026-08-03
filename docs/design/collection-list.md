@@ -2,6 +2,7 @@
 
 - 状态：Accepted
 - 目标版本：`0.2.0`
+- 后续修订：`0.3.0` 起的工具拆分与展示语义见 [收藏查询意图与展示边界](collection-query-intent.md)，该文档取代本文的 MCP 参数与 Skill 分页规则。
 - 日期：2026-08-03
 - 依据：[Bangumi 官方 API 文档](https://bangumi.github.io/api/) 与 [OpenAPI 定义](https://bangumi.github.io/api/dist.json)
 

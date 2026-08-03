@@ -15,7 +15,7 @@ def test_runtime_config_keeps_token_out_of_repr(tmp_path) -> None:
 
     assert config.access_token == "private-value"
     assert config.user_agent == (
-        "akashic-plugins/bangumi-mcp/0.2.1 "
+        "akashic-plugins/bangumi-mcp/0.3.0 "
         "(https://github.com/akashic-plugins/bangumi-mcp)"
     )
     assert "private-value" not in repr(config)

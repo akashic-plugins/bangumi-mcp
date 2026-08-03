@@ -30,17 +30,43 @@ def create_mcp_server(data_dir: Path) -> FastMCP:
     def list_collections(
         subject_type: SubjectTypeFilter = "all",
         status: CollectionStatusFilter = "all",
-        limit: int = 10,
         offset: int = 0,
     ) -> str:
-        """分页查询当前 Token 用户收藏；只读，默认 10 条。"""
+        """普通列表与明确继续查询专用；只读，每页固定 10 条。"""
 
         return _json(
             service().list_collections(
                 subject_type=subject_type,
                 status=status,
-                limit=limit,
                 offset=offset,
+            )
+        )
+
+    @mcp.tool()
+    def count_collections(
+        subject_type: SubjectTypeFilter = "all",
+        status: CollectionStatusFilter = "all",
+    ) -> str:
+        """只查询当前 Token 用户匹配收藏的总数；只读。"""
+
+        return _json(
+            service().count_collections(
+                subject_type=subject_type,
+                status=status,
+            )
+        )
+
+    @mcp.tool()
+    def list_all_collections(
+        subject_type: SubjectTypeFilter = "all",
+        status: CollectionStatusFilter = "all",
+    ) -> str:
+        """仅当用户明确要求全部列出或完整分析时调用；只读，最多 200 条。"""
+
+        return _json(
+            service().list_all_collections(
+                subject_type=subject_type,
+                status=status,
             )
         )
 
