@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 DEFAULT_USER_AGENT = (
-    "akashic-plugins/bangumi-mcp/0.3.0 "
+    "akashic-plugins/bangumi-mcp/0.4.0 "
     "(https://github.com/akashic-plugins/bangumi-mcp)"
 )
 
