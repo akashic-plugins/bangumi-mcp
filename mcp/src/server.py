@@ -9,16 +9,28 @@ from mcp.server.fastmcp import FastMCP
 from .client import BangumiClient
 from .config import load_runtime_config
 from .confirmation import ConfirmationStore
+from .query import (
+    CollectionQueryRequestOperation,
+    CollectionQuerySessionStore,
+    QueryConfirmationStore,
+)
 from .service import BangumiService, CollectionStatusFilter, SubjectTypeFilter
 
 
 def create_mcp_server(data_dir: Path) -> FastMCP:
     confirmations = ConfirmationStore()
+    query_confirmations = QueryConfirmationStore()
+    query_sessions = CollectionQuerySessionStore()
     mcp = FastMCP("bangumi")
 
     def service() -> BangumiService:
         config = load_runtime_config(data_dir)
-        return BangumiService(BangumiClient(config), confirmations)
+        return BangumiService(
+            BangumiClient(config),
+            confirmations,
+            query_confirmations,
+            query_sessions,
+        )
 
     @mcp.tool()
     def get_collection_status(subject_id: int) -> str:
@@ -30,17 +42,21 @@ def create_mcp_server(data_dir: Path) -> FastMCP:
     def list_collections(
         subject_type: SubjectTypeFilter = "all",
         status: CollectionStatusFilter = "all",
-        offset: int = 0,
     ) -> str:
-        """普通列表与明确继续查询专用；只读，每页固定 10 条。"""
+        """创建普通收藏查询会话；只读，首页固定 10 条。"""
 
         return _json(
             service().list_collections(
                 subject_type=subject_type,
                 status=status,
-                offset=offset,
             )
         )
+
+    @mcp.tool()
+    def continue_collection_query(query_id: str) -> str:
+        """通过不透明 query_id 继续 10 条展示页；达到 100 条前要求确认。"""
+
+        return _json(service().continue_collection_query(query_id))
 
     @mcp.tool()
     def count_collections(
@@ -57,16 +73,40 @@ def create_mcp_server(data_dir: Path) -> FastMCP:
         )
 
     @mcp.tool()
-    def list_all_collections(
+    def prepare_collection_query(
         subject_type: SubjectTypeFilter = "all",
         status: CollectionStatusFilter = "all",
+        operation: CollectionQueryRequestOperation = "list_all",
+        min_rating: int | None = None,
+        max_rating: int | None = None,
+        requested_count: int = 10,
+        return_all_matches: bool = False,
     ) -> str:
-        """仅当用户明确要求全部列出或完整分析时调用；只读，最多 200 条。"""
+        """预览完整或大量收藏查询；只计数，绝不执行全量读取。"""
 
         return _json(
-            service().list_all_collections(
+            service().prepare_collection_query(
                 subject_type=subject_type,
                 status=status,
+                operation=operation,
+                min_rating=min_rating,
+                max_rating=max_rating,
+                requested_count=requested_count,
+                return_all_matches=return_all_matches,
+            )
+        )
+
+    @mcp.tool()
+    def execute_prepared_collection_query(
+        confirmation_id: str,
+        confirmation_text: str,
+    ) -> str:
+        """执行已确认的固定只读查询计划；禁止与 prepare 同轮调用。"""
+
+        return _json(
+            service().execute_prepared_collection_query(
+                confirmation_id,
+                confirmation_text,
             )
         )
 

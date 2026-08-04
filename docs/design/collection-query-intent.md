@@ -4,6 +4,7 @@
 - 目标版本：`0.3.0`
 - 官方依据：[Bangumi API](https://bangumi.github.io/api/) 与 [OpenAPI 定义](https://bangumi.github.io/api/dist.json)
 - 补充并修正：[用户收藏列表设计](collection-list.md) 的 MCP 工具与 Skill 分页语义
+- 后续修订：`0.4.0` 起的完整/大量查询确认、不可见 `offset` 和无 200 条上限语义见 [收藏完整与大量查询确认边界](collection-query-confirmation.md)，该文档取代本文的直接完整查询行为。
 
 ## 1. 问题
 

@@ -1,11 +1,21 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from math import ceil
 from numbers import Real
 from typing import Any, Literal
 
 from .client import BangumiApiError, BangumiClient
 from .confirmation import ConfirmationStore, PreparedUpdate
+from .query import (
+    CollectionQueryOperation,
+    CollectionQueryRequestOperation,
+    CollectionQuerySessionStore,
+    ContinueAction,
+    PreparedCollectionQuery,
+    QueryConfirmationStore,
+    QueryStateError,
+)
 
 
 SUBJECT_ANIME = 2
@@ -60,7 +70,6 @@ COLLECTION_STATUS_VALUES = {
 }
 COLLECTION_DISPLAY_PAGE_SIZE = 10
 COLLECTION_BULK_PAGE_SIZE = 50
-COLLECTION_COMPLETE_LIMIT = 200
 
 SubjectTypeFilter = Literal["all", "book", "anime", "music", "game", "real"]
 CollectionStatusFilter = Literal[
@@ -82,45 +91,55 @@ class BangumiService:
         self,
         client: BangumiClient,
         confirmations: ConfirmationStore,
+        query_confirmations: QueryConfirmationStore | None = None,
+        query_sessions: CollectionQuerySessionStore | None = None,
     ) -> None:
         self._client = client
         self._confirmations = confirmations
+        self._query_confirmations = query_confirmations or QueryConfirmationStore()
+        self._query_sessions = query_sessions or CollectionQuerySessionStore()
 
     def list_collections(
         self,
         subject_type: SubjectTypeFilter = "all",
         status: CollectionStatusFilter = "all",
-        offset: int = 0,
     ) -> dict[str, object]:
-        """查询当前用户的一页收藏，展示页固定为 10 条。"""
+        """查询当前用户的首页收藏并创建服务端分页会话。"""
 
         api_subject_type, api_status = _collection_filter_values(
             subject_type, status
         )
-        offset = _bounded_int(offset, "offset", minimum=0)
         username = _username(self._client.get_me())
         page = self._read_collection_page(
             username,
             subject_type=api_subject_type,
             status=api_status,
             limit=COLLECTION_DISPLAY_PAGE_SIZE,
-            offset=offset,
+            offset=0,
         )
         total = page["total"]
-        returned = len(page["collections"])
-        has_more = offset + returned < total
+        items = page["collections"]
+        returned = len(items)
+        query_id, expires_at = self._query_sessions.create_page_session(
+            username=username,
+            subject_type=subject_type,
+            status=status,
+            total=total,
+            items=items,
+        )
         return {
             "user": {"username": username},
             "filters": _collection_filters(subject_type, status),
             "page": {
                 "total": total,
                 "limit": COLLECTION_DISPLAY_PAGE_SIZE,
-                "offset": offset,
+                "displayed": returned,
                 "returned": returned,
-                "has_more": has_more,
-                "next_offset": offset + returned if has_more else None,
+                "has_more": query_id is not None,
+                "query_id": query_id,
+                "query_expires_at": _timestamp(expires_at),
             },
-            "collections": page["collections"],
+            "collections": items,
         }
 
     def count_collections(
@@ -147,25 +166,251 @@ class BangumiService:
             "total": page["total"],
         }
 
-    def list_all_collections(
+    def continue_collection_query(self, query_id: str) -> dict[str, object]:
+        """通过不透明会话 ID 继续查询，达到 100 条前强制确认。"""
+
+        username = _username(self._client.get_me())
+        return self._continue_collection_query(query_id.strip(), username)
+
+    def prepare_collection_query(
         self,
         subject_type: SubjectTypeFilter = "all",
         status: CollectionStatusFilter = "all",
+        operation: CollectionQueryRequestOperation = "list_all",
+        min_rating: int | None = None,
+        max_rating: int | None = None,
+        requested_count: int = COLLECTION_DISPLAY_PAGE_SIZE,
+        return_all_matches: bool = False,
     ) -> dict[str, object]:
-        """按 50 条分页完整读取已明确请求的全部收藏。"""
+        """轻量计数并预览完整查询，不执行全量读取。"""
 
         api_subject_type, api_status = _collection_filter_values(
             subject_type, status
         )
+        operation = _query_operation(operation)
+        min_rating = _optional_rating(min_rating, "min_rating")
+        max_rating = _optional_rating(max_rating, "max_rating")
+        if min_rating is not None and max_rating is not None and min_rating > max_rating:
+            raise BangumiInputError("min_rating 不能大于 max_rating")
+        requested_count = _bounded_int(
+            requested_count,
+            "requested_count",
+            minimum=1,
+        )
+        if operation == "continue":
+            raise BangumiInputError("continue 只能由分页会话生成")
+        if operation == "filter" and min_rating is None and max_rating is None:
+            raise BangumiInputError("filter 至少需要 min_rating 或 max_rating")
+        if operation == "list_all" and (
+            min_rating is not None or max_rating is not None
+        ):
+            raise BangumiInputError("评分条件必须使用 filter 操作")
+        if operation != "filter" and return_all_matches:
+            raise BangumiInputError("return_all_matches 只支持 filter 操作")
         username = _username(self._client.get_me())
-        expected_total: int | None = None
+        count_page = self._read_collection_page(
+            username,
+            subject_type=api_subject_type,
+            status=api_status,
+            limit=1,
+            offset=0,
+        )
+        candidate_total = count_page["total"]
+        confirmation_text = _collection_query_confirmation_text(
+            operation=operation,
+            subject_type=subject_type,
+            status=status,
+            candidate_total=candidate_total,
+            min_rating=min_rating,
+            max_rating=max_rating,
+            requested_count=requested_count,
+            return_all_matches=return_all_matches,
+        )
+        pending = self._query_confirmations.prepare(
+            PreparedCollectionQuery(
+                operation=operation,
+                username=username,
+                subject_type=subject_type,
+                status=status,
+                candidate_total=candidate_total,
+                confirmation_text=confirmation_text,
+                min_rating=min_rating,
+                max_rating=max_rating,
+                requested_count=requested_count,
+                return_all_matches=return_all_matches,
+            )
+        )
+        return _query_confirmation_preview(
+            pending.confirmation_id,
+            pending.expires_at,
+            confirmation_text,
+            {
+                "user": {"username": username},
+                "filters": _collection_filters(subject_type, status),
+                "operation": operation,
+                "local_filter": _rating_filter(min_rating, max_rating),
+                "candidate_total": candidate_total,
+                "planned_detail_reads": candidate_total,
+                "estimated_list_requests": max(
+                    1,
+                    ceil(candidate_total / COLLECTION_BULK_PAGE_SIZE),
+                ),
+                "trigger": {
+                    "complete_query": True,
+                    "at_least_100_items": candidate_total >= 100,
+                },
+                "read_only": True,
+            },
+        )
+
+    def execute_prepared_collection_query(
+        self,
+        confirmation_id: str,
+        confirmation_text: str,
+    ) -> dict[str, object]:
+        """消费一次性查询确认并执行固定计划。"""
+
+        plan = self._query_confirmations.consume(
+            confirmation_id.strip(),
+            confirmation_text,
+        )
+        username = _username(self._client.get_me())
+        if username != plan.username:
+            raise BangumiInputError("当前 Bangumi 用户已变化，请重新预览")
+        if plan.operation == "continue":
+            if plan.query_id is None:
+                raise QueryStateError("继续查询计划缺少 query_id")
+            self._query_sessions.authorize(plan.query_id, username)
+            return self._continue_collection_query(plan.query_id, username)
+
+        collections, request_count = self._read_all_collections(plan)
+        if plan.operation == "list_all":
+            return _complete_query_result(plan, collections, request_count)
+        if plan.operation == "analyze":
+            return {
+                **_complete_query_result(plan, [], request_count),
+                "analysis": _collection_analysis(collections),
+            }
+
+        matches = [
+            item
+            for item in collections
+            if _rating_matches(item, plan.min_rating, plan.max_rating)
+        ]
+        if plan.return_all_matches:
+            displayed = matches
+            query_id = None
+            expires_at = None
+        else:
+            query_id, expires_at, displayed = self._query_sessions.create_result_session(
+                username=username,
+                subject_type=plan.subject_type,
+                status=plan.status,
+                source_total=plan.candidate_total,
+                items=matches,
+                initial_count=plan.requested_count,
+            )
+        return {
+            **_complete_query_result(plan, [], request_count),
+            "local_filter": _rating_filter(plan.min_rating, plan.max_rating),
+            "matched_total": len(matches),
+            "displayed": len(displayed),
+            "returned": len(displayed),
+            "has_more": query_id is not None,
+            "query_id": query_id,
+            "query_expires_at": _timestamp(expires_at),
+            "collections": displayed,
+        }
+
+    def _continue_collection_query(
+        self,
+        query_id: str,
+        username: str,
+    ) -> dict[str, object]:
+        action = self._query_sessions.next_action(query_id, username)
+        if action.kind == "page":
+            return _continued_query_result(action)
+        if action.kind == "confirm":
+            remaining = action.source_total - action.read_count
+            confirmation_text = (
+                f"确认：允许当前收藏查询从已读 "
+                f"{action.read_count} 条继续读取至全部 "
+                f"{action.source_total} 条"
+            )
+            pending = self._query_confirmations.prepare(
+                PreparedCollectionQuery(
+                    operation="continue",
+                    username=username,
+                    subject_type=action.subject_type,
+                    status=action.status,
+                    candidate_total=action.source_total,
+                    confirmation_text=confirmation_text,
+                    query_id=action.query_id,
+                )
+            )
+            return _query_confirmation_preview(
+                pending.confirmation_id,
+                pending.expires_at,
+                confirmation_text,
+                {
+                    "user": {"username": username},
+                    "filters": _collection_filters(
+                        action.subject_type,
+                        action.status,
+                    ),
+                    "query_id": action.query_id,
+                    "already_read": action.read_count,
+                    "candidate_total": action.source_total,
+                    "planned_remaining_reads": remaining,
+                    "estimated_list_requests": max(
+                        1,
+                        ceil(remaining / COLLECTION_BULK_PAGE_SIZE),
+                    ),
+                    "trigger": {
+                        "complete_query": False,
+                        "at_least_100_items": True,
+                    },
+                    "read_only": True,
+                },
+            )
+
+        api_subject_type, api_status = _collection_filter_values(
+            action.subject_type,
+            action.status,
+        )
+        try:
+            page = self._read_collection_page(
+                username,
+                subject_type=api_subject_type,
+                status=api_status,
+                limit=action.limit,
+                offset=action.offset,
+            )
+            completed = self._query_sessions.finish_fetch(
+                action,
+                total=page["total"],
+                items=page["collections"],
+            )
+        except BaseException:
+            self._query_sessions.cancel_fetch(action)
+            raise
+        return _continued_query_result(completed)
+
+    def _read_all_collections(
+        self,
+        plan: PreparedCollectionQuery,
+    ) -> tuple[list[dict[str, object]], int]:
+        api_subject_type, api_status = _collection_filter_values(
+            plan.subject_type,
+            plan.status,
+        )
         offset = 0
         request_count = 0
         collections: list[dict[str, object]] = []
         subject_ids: set[int] = set()
-        while expected_total is None or offset < expected_total:
+        while request_count == 0 or offset < plan.candidate_total:
             page = self._read_collection_page(
-                username,
+                plan.username,
                 subject_type=api_subject_type,
                 status=api_status,
                 limit=COLLECTION_BULK_PAGE_SIZE,
@@ -173,41 +418,23 @@ class BangumiService:
             )
             request_count += 1
             total = page["total"]
-            if total > COLLECTION_COMPLETE_LIMIT:
-                raise BangumiInputError(
-                    f"收藏共 {total} 条，超过完整读取上限 "
-                    f"{COLLECTION_COMPLETE_LIMIT} 条；请缩小作品类型或收藏状态范围"
+            if total != plan.candidate_total:
+                raise BangumiApiError(
+                    "Bangumi 收藏总数与已确认查询计划不一致"
                 )
-            if expected_total is None:
-                expected_total = total
-            elif total != expected_total:
-                raise BangumiApiError("Bangumi 收藏总数在完整读取期间发生变化")
             page_items = page["collections"]
             for item in page_items:
-                subject = item["subject"]
-                if not isinstance(subject, dict):
-                    raise BangumiApiError("Bangumi 收藏条目缺少 subject")
-                subject_id = subject.get("id")
-                if not isinstance(subject_id, int) or isinstance(subject_id, bool):
-                    raise BangumiApiError("Bangumi 收藏条目 subject id 无效")
+                subject_id = _collection_subject_id(item)
                 if subject_id in subject_ids:
                     raise BangumiApiError("Bangumi 收藏完整读取出现重复条目")
                 subject_ids.add(subject_id)
             collections.extend(page_items)
             offset += len(page_items)
-
-        if expected_total is None or len(collections) != expected_total:
+            if plan.candidate_total == 0:
+                break
+        if len(collections) != plan.candidate_total:
             raise BangumiApiError("Bangumi 收藏完整读取条目数不匹配")
-        return {
-            "user": {"username": username},
-            "filters": _collection_filters(subject_type, status),
-            "complete": True,
-            "total": expected_total,
-            "returned": len(collections),
-            "api_page_size": COLLECTION_BULK_PAGE_SIZE,
-            "request_count": request_count,
-            "collections": collections,
-        }
+        return collections, request_count
 
     def _read_collection_page(
         self,
@@ -508,6 +735,192 @@ def _collection_filters(
     status: CollectionStatusFilter,
 ) -> dict[str, str]:
     return {"subject_type": subject_type, "status": status}
+
+
+def _timestamp(value: float | None) -> str | None:
+    if value is None:
+        return None
+    return datetime.fromtimestamp(value, tz=timezone.utc).isoformat()
+
+
+def _query_operation(value: object) -> CollectionQueryOperation:
+    if value not in {"list_all", "filter", "analyze", "continue"}:
+        raise BangumiInputError(
+            "operation 只支持 list_all、filter 或 analyze"
+        )
+    return value  # type: ignore[return-value]
+
+
+def _optional_rating(value: object, label: str) -> int | None:
+    if value is None:
+        return None
+    return _bounded_int(value, label, minimum=0, maximum=10)
+
+
+def _rating_filter(
+    min_rating: int | None,
+    max_rating: int | None,
+) -> dict[str, int | None] | None:
+    if min_rating is None and max_rating is None:
+        return None
+    return {"min_rating": min_rating, "max_rating": max_rating}
+
+
+def _collection_query_confirmation_text(
+    *,
+    operation: CollectionQueryOperation,
+    subject_type: str,
+    status: str,
+    candidate_total: int,
+    min_rating: int | None,
+    max_rating: int | None,
+    requested_count: int,
+    return_all_matches: bool,
+) -> str:
+    scope = f"subject_type={subject_type}, status={status}"
+    if operation == "list_all":
+        purpose = "全部列出"
+    elif operation == "analyze":
+        purpose = "完整统计分析"
+    else:
+        bounds: list[str] = []
+        if min_rating is not None:
+            bounds.append(f"评分至少 {min_rating}")
+        if max_rating is not None:
+            bounds.append(f"评分至多 {max_rating}")
+        output = "全部匹配结果" if return_all_matches else f"前 {requested_count} 条匹配结果"
+        purpose = f"筛选{' 且 '.join(bounds)}并返回{output}"
+    return (
+        f"确认：完整读取当前用户的 {candidate_total} 条候选收藏"
+        f"（{scope}），用于{purpose}"
+    )
+
+
+def _query_confirmation_preview(
+    confirmation_id: str,
+    expires_at: float,
+    confirmation_text: str,
+    target: dict[str, object],
+) -> dict[str, object]:
+    return {
+        "requires_confirmation": True,
+        "confirmation_id": confirmation_id,
+        "expires_at": _timestamp(expires_at),
+        "confirmation_text": confirmation_text,
+        "target": target,
+        "instruction": (
+            "显示 target 和 confirmation_text 后结束本轮；"
+            "只能在用户下一条消息逐字确认后执行查询。"
+        ),
+    }
+
+
+def _continued_query_result(action: ContinueAction) -> dict[str, object]:
+    items = list(action.items)
+    has_more = action.displayed_count < action.total
+    return {
+        "user": {"username": action.username},
+        "filters": _collection_filters(action.subject_type, action.status),
+        "page": {
+            "total": action.total,
+            "limit": COLLECTION_DISPLAY_PAGE_SIZE,
+            "displayed": action.displayed_count,
+            "returned": len(items),
+            "has_more": has_more,
+            "query_id": action.query_id if has_more else None,
+        },
+        "collections": items,
+    }
+
+
+def _complete_query_result(
+    plan: PreparedCollectionQuery,
+    collections: list[dict[str, object]],
+    request_count: int,
+) -> dict[str, object]:
+    return {
+        "user": {"username": plan.username},
+        "filters": _collection_filters(plan.subject_type, plan.status),
+        "operation": plan.operation,
+        "complete": True,
+        "candidate_total": plan.candidate_total,
+        "scanned": plan.candidate_total,
+        "api_page_size": COLLECTION_BULK_PAGE_SIZE,
+        "request_count": request_count,
+        "returned": len(collections),
+        "collections": collections,
+    }
+
+
+def _collection_subject_id(item: dict[str, object]) -> int:
+    subject = item.get("subject")
+    if not isinstance(subject, dict):
+        raise BangumiApiError("Bangumi 收藏条目缺少 subject")
+    subject_id = subject.get("id")
+    if not isinstance(subject_id, int) or isinstance(subject_id, bool):
+        raise BangumiApiError("Bangumi 收藏条目 subject id 无效")
+    return subject_id
+
+
+def _collection_rating(item: dict[str, object]) -> int:
+    collection = item.get("collection")
+    if not isinstance(collection, dict):
+        raise BangumiApiError("Bangumi 收藏条目缺少 collection")
+    rating = collection.get("rating")
+    if not isinstance(rating, int) or isinstance(rating, bool):
+        raise BangumiApiError("Bangumi 收藏条目 rating 无效")
+    return rating
+
+
+def _rating_matches(
+    item: dict[str, object],
+    min_rating: int | None,
+    max_rating: int | None,
+) -> bool:
+    rating = _collection_rating(item)
+    return (
+        (min_rating is None or rating >= min_rating)
+        and (max_rating is None or rating <= max_rating)
+    )
+
+
+def _collection_analysis(
+    items: list[dict[str, object]],
+) -> dict[str, object]:
+    rating_distribution = {str(value): 0 for value in range(11)}
+    status_distribution: dict[str, int] = {}
+    subject_type_distribution: dict[str, int] = {}
+    rated_values: list[int] = []
+    for item in items:
+        rating = _collection_rating(item)
+        rating_distribution[str(rating)] += 1
+        if rating > 0:
+            rated_values.append(rating)
+        collection = item["collection"]
+        subject = item["subject"]
+        if not isinstance(collection, dict) or not isinstance(subject, dict):
+            raise BangumiApiError("Bangumi 收藏分析条目无效")
+        status = collection.get("status")
+        subject_type = subject.get("type_value")
+        if not isinstance(status, str) or not isinstance(subject_type, str):
+            raise BangumiApiError("Bangumi 收藏分析分类无效")
+        status_distribution[status] = status_distribution.get(status, 0) + 1
+        subject_type_distribution[subject_type] = (
+            subject_type_distribution.get(subject_type, 0) + 1
+        )
+    return {
+        "total": len(items),
+        "rated_count": len(rated_values),
+        "unrated_count": len(items) - len(rated_values),
+        "average_rating": (
+            round(sum(rated_values) / len(rated_values), 2)
+            if rated_values
+            else None
+        ),
+        "rating_distribution": rating_distribution,
+        "status_distribution": status_distribution,
+        "subject_type_distribution": subject_type_distribution,
+    }
 
 
 def _subject_identity(subject: dict[str, Any], subject_id: int) -> dict[str, object]:

@@ -5,18 +5,22 @@ description: 分页查询用户的 Bangumi 收藏列表、单个条目状态和�
 
 # Bangumi
 
-使用 `bangumi` MCP 查询收藏，并严格执行一次一确认的写入流程。
+使用 `bangumi` MCP 查询收藏，并严格执行只读大量查询确认和一次一确认的写入流程。
 
 ## 收藏列表
 
 查询当前 Token 用户的收藏。优先使用最窄的作品类型和收藏状态过滤，不要请求任意其他用户名。
 
-- 普通“列出”请求调用 `list_collections`；它固定返回最多 10 条。只读取一页，并说明总数和是否还有下一页。
-- 用户明确要求“继续”或“下一页”时，才再调用 `list_collections`，并使用上一页的 `next_offset`；不得猜测 offset，不得在普通列出的同一轮自动追逐后续页。
+- 普通“列出”请求调用 `list_collections`；它固定返回最多 10 条、总数和不透明 `query_id`。不得在同一轮自动追逐后续页。
+- 用户明确要求“继续”或“下一页”时，才调用 `continue_collection_query(query_id)`。不得猜测或自行构造 offset；只使用上一页返回的 `query_id`。
 - 用户只询问数量时调用 `count_collections`；它只读取 1 条来取得总数，不扫描全部收藏。
-- 只有用户明确说“全部列出”、“所有”、“完整列表”，或明确要求基于全部结果分析时，才调用 `list_all_collections`。该工具向 Bangumi 每页 50 条分批取完。
-- 对“全部列出”，最终回复必须列出工具返回的全部条目，不得再截成 10 条。对完整统计或分析，只输出用户要求的结论，不重复粘贴全部原始数据。
-- `list_all_collections` 最多 200 条。超过时如实说明工具错误，要求用户缩小作品类型或收藏状态范围；不得把前 200 条声称为全部。
+- 任何需要遍历全部候选收藏的请求，包括“全部/所有/完整”、完整分析和评分筛选，都先调用 `prepare_collection_query`。即使候选集少于 100 条，或用户已经明确说“全部”，也必须显示 `target` 和 `confirmation_text` 后结束本轮。
+- 普通分页累计读取最多 90 条不需要确认；下一页会使累计读取达到或超过 100 条时，`continue_collection_query` 会返回确认预览。此时同样显示预览并结束本轮，不得继续读取。
+- 下一条用户消息去除首尾空白后必须与查询 `confirmation_text` 逐字一致，才调用 `execute_prepared_collection_query`。prepare 和 execute 禁止在同一轮调用；模糊同意、旧确认或改变条件都要重新预览。
+- 一次查询确认覆盖同一固定计划的全部分页和内存结果翻页，不得每 50 条或每个展示页重复确认。查询确认是只读授权，不能传给 `commit_prepared_update`。
+- 评分条件使用 `operation="filter"` 和 `min_rating`/`max_rating`，由插件确认后以每页 50 条扫描并筛选；不得让模型用 10 条展示页手工扫描。
+- 对“全部列出”，使用 `return_all_matches=True`（评分筛选）或 `operation="list_all"`，最终回复必须保留全部结果语义。完整查询没有 100 或 200 条静默上限。
+- 完整统计使用 `operation="analyze"`，只输出用户要求的结论，不重复粘贴全部原始数据。
 - `reported_episode_progress` 只是列表记录的只读进度摘要，不代表从第 1 集开始连续看过，也不得用于写入。
 
 ## 单条目查询
