@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import warnings
+from contextlib import asynccontextmanager, suppress
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
 from mcp.server.fastmcp import FastMCP
 
+from .anilist import AniListClient
+from .anime_updates import AnimeUpdateCoordinator, AnimeUpdateStore
 from .client import BangumiClient
-from .config import load_runtime_config
+from .config import BangumiRuntimeConfig, load_runtime_config
 from .confirmation import ConfirmationStore
 from .query import (
     CollectionQueryRequestOperation,
@@ -21,7 +27,49 @@ def create_mcp_server(data_dir: Path) -> FastMCP:
     confirmations = ConfirmationStore()
     query_confirmations = QueryConfirmationStore()
     query_sessions = CollectionQuerySessionStore()
-    mcp = FastMCP("bangumi")
+    runtime_config: BangumiRuntimeConfig | None = None
+    coordinator: AnimeUpdateCoordinator | None = None
+    store = AnimeUpdateStore(data_dir / "anime_updates.db")
+    if (data_dir / "config.local.toml").exists():
+        runtime_config = load_runtime_config(data_dir)
+        if runtime_config.anime_push.enabled:
+            store.initialize()
+            coordinator = AnimeUpdateCoordinator(
+                store,
+                BangumiClient(runtime_config),
+                AniListClient(
+                    user_agent=runtime_config.user_agent,
+                    token=runtime_config.anime_push.anilist_token,
+                ),
+                runtime_config.anime_push,
+            )
+
+    @asynccontextmanager
+    async def lifespan(_):
+        task: asyncio.Task[None] | None = None
+        if coordinator is not None:
+            task = asyncio.create_task(
+                coordinator.run(),
+                name="bangumi-anime-update-refresh",
+            )
+        try:
+            yield {"anime_update_coordinator": coordinator}
+        finally:
+            if task is not None:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+
+    # MCP 1.26 leaves its generic lifespan Settings field unresolved.
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="Field 'lifespan' has an incomplete definition.*",
+        )
+        if coordinator is None:
+            mcp = FastMCP("bangumi")
+        else:
+            mcp = FastMCP("bangumi", lifespan=lifespan)
 
     def service() -> BangumiService:
         config = load_runtime_config(data_dir)
@@ -31,6 +79,11 @@ def create_mcp_server(data_dir: Path) -> FastMCP:
             query_confirmations,
             query_sessions,
         )
+
+    def anime_store() -> AnimeUpdateStore:
+        if runtime_config is None or not runtime_config.anime_push.enabled:
+            raise RuntimeError("anime_push 未启用")
+        return store
 
     @mcp.tool()
     def get_collection_status(subject_id: int) -> str:
@@ -144,8 +197,28 @@ def create_mcp_server(data_dir: Path) -> FastMCP:
             )
         )
 
+    @mcp.tool()
+    def get_anime_update_alerts(offset: int = 0, limit: int = 50) -> str:
+        """只读返回本地已到期且尚未 ACK 的放送提醒快照。"""
+
+        return _json(anime_store().fetch_pending(offset, limit))
+
+    @mcp.tool()
+    def acknowledge_anime_update_alerts(
+        event_ids: list[str],
+        feedback: str | None = None,
+    ) -> str:
+        """在真实外部投递成功后，按 event_id 原子确认放送提醒。"""
+
+        del feedback
+        count = anime_store().acknowledge(
+            event_ids,
+            datetime.now(timezone.utc),
+        )
+        return _json({"acked": count})
+
     return mcp
 
 
-def _json(payload: dict[str, object]) -> str:
+def _json(payload: object) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))

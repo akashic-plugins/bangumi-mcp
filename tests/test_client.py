@@ -9,9 +9,16 @@ from src.config import BangumiRuntimeConfig
 
 
 class FakeResponse:
-    def __init__(self, status_code: int, payload: object = None) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        payload: object = None,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self.status_code = status_code
         self._payload = payload
+        self.headers = headers or {}
 
     def json(self) -> object:
         return self._payload
@@ -33,7 +40,7 @@ def client(session: FakeSession, token: str = "secret-token") -> BangumiClient:
     return BangumiClient(
         BangumiRuntimeConfig(
             access_token=token,
-            user_agent="akashic-plugins/bangumi-mcp/0.4.0 (https://example.test)",
+            user_agent="akashic-plugins/bangumi-mcp/0.5.0 (https://example.test)",
         ),
         session=session,
     )
@@ -145,7 +152,7 @@ def test_status_write_only_sends_collection_type() -> None:
                 "Accept": "application/json",
                 "Authorization": "Bearer secret-token",
                 "User-Agent": (
-                    "akashic-plugins/bangumi-mcp/0.4.0 "
+                    "akashic-plugins/bangumi-mcp/0.5.0 "
                     "(https://example.test)"
                 ),
             },
@@ -183,6 +190,51 @@ def test_episode_collections_are_fully_paginated() -> None:
     assert [item["episode"]["id"] for item in result] == [1, 2]
     assert [call["params"]["offset"] for call in session.calls] == [0, 1]
     assert all(call["params"]["episode_type"] == 0 for call in session.calls)
+
+
+def test_episode_catalog_is_fully_paginated() -> None:
+    session = FakeSession(
+        FakeResponse(
+            200,
+            {"total": 2, "limit": 100, "offset": 0, "data": [{"id": 1}]},
+        ),
+        FakeResponse(
+            200,
+            {"total": 2, "limit": 100, "offset": 1, "data": [{"id": 2}]},
+        ),
+    )
+
+    result = client(session).list_episodes(42)
+
+    assert [item["id"] for item in result] == [1, 2]
+    assert all(call["url"].endswith("/v0/episodes") for call in session.calls)
+    assert [call["params"]["offset"] for call in session.calls] == [0, 1]
+    assert all(call["params"]["subject_id"] == 42 for call in session.calls)
+    assert all(call["params"]["type"] == 0 for call in session.calls)
+
+
+def test_single_episode_collection_uses_literal_hyphens() -> None:
+    payload = {"episode": {"id": 1001}, "type": 2, "updated_at": 123}
+    session = FakeSession(FakeResponse(200, payload))
+
+    result = client(session).get_episode_collection(1001)
+
+    assert result == payload
+    assert session.calls[0]["url"].endswith(
+        "/v0/users/-/collections/-/episodes/1001"
+    )
+
+
+def test_rate_limit_exposes_only_valid_retry_after() -> None:
+    session = FakeSession(
+        FakeResponse(429, {}, headers={"Retry-After": "120"})
+    )
+
+    with pytest.raises(BangumiApiError) as caught:
+        client(session).get_me()
+
+    assert caught.value.status_code == 429
+    assert caught.value.retry_after_seconds == 120
 
 
 def test_collection_404_is_a_distinct_not_collected_result() -> None:

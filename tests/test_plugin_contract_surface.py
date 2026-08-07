@@ -25,7 +25,7 @@ def test_plugin_declares_v2_mcp_and_skill_roots() -> None:
 
     assert assignments["api_version"] == 2
     assert assignments["name"] == "bangumi"
-    assert assignments["version"] == "0.4.0"
+    assert assignments["version"] == "0.5.0"
     assert all(
         not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
         or item.name != "initialize"
@@ -34,3 +34,8 @@ def test_plugin_declares_v2_mcp_and_skill_roots() -> None:
     source = PLUGIN.read_text(encoding="utf-8")
     assert 'return ("skills",)' in source
     assert 'command=("python", "mcp/run_mcp.py")' in source
+    assert 'id="anime_updates"' in source
+    assert 'channels=("alert",)' in source
+    assert 'fetch_tool="get_anime_update_alerts"' in source
+    assert 'ack_tool="acknowledge_anime_update_alerts"' in source
+    assert "fetch_page_size=50" in source

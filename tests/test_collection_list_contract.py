@@ -19,8 +19,10 @@ def test_mcp_registers_collection_list_tool(tmp_path: Path) -> None:
         "continue_collection_query",
         "count_collections",
         "execute_prepared_collection_query",
+        "get_anime_update_alerts",
         "get_collection_status",
         "list_collections",
+        "acknowledge_anime_update_alerts",
         "prepare_anime_progress_update",
         "prepare_collection_query",
         "prepare_collection_status_update",
@@ -74,6 +76,16 @@ def test_mcp_registers_collection_list_tool(tmp_path: Path) -> None:
         tool.parameters for tool in tools if tool.name == "count_collections"
     )
     assert set(count_schema["properties"]) == {"subject_type", "status"}
+    fetch_schema = next(
+        tool.parameters for tool in tools if tool.name == "get_anime_update_alerts"
+    )
+    assert set(fetch_schema["properties"]) == {"offset", "limit"}
+    ack_schema = next(
+        tool.parameters
+        for tool in tools
+        if tool.name == "acknowledge_anime_update_alerts"
+    )
+    assert set(ack_schema["properties"]) == {"event_ids", "feedback"}
 
 
 def test_skill_preserves_collection_list_boundaries() -> None:
@@ -92,3 +104,6 @@ def test_skill_preserves_collection_list_boundaries() -> None:
     assert "达到或超过 100 条" in skill
     assert "没有 100 或 200 条静默上限" in skill
     assert "prepare 和 execute 禁止在同一轮调用" in skill
+    assert "计划放送" in skill
+    assert "不能说某个流媒体" in skill
+    assert "不得为了查询、重放、跳过或修改提醒而手动调用" in skill

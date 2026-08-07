@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Protocol
 from urllib.parse import quote
 
@@ -14,9 +16,16 @@ REQUEST_TIMEOUT = (3.05, 15.0)
 
 
 class BangumiApiError(RuntimeError):
-    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        retry_after_seconds: float | None = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.retry_after_seconds = retry_after_seconds
 
 
 class HttpTransport(Protocol):
@@ -158,6 +167,75 @@ class BangumiClient:
             if not page:
                 raise BangumiApiError("Bangumi 章节收藏分页提前结束")
 
+    def list_episodes(
+        self,
+        subject_id: int,
+        *,
+        episode_type: int = 0,
+    ) -> list[dict[str, Any]]:
+        """分页读取条目的章节目录。"""
+
+        offset = 0
+        limit = 100
+        result: list[dict[str, Any]] = []
+        while True:
+            payload = self._object(
+                self._request_json(
+                    "GET",
+                    "/v0/episodes",
+                    params={
+                        "subject_id": subject_id,
+                        "type": episode_type,
+                        "offset": offset,
+                        "limit": limit,
+                    },
+                ),
+                "章节目录分页",
+            )
+            total = _response_int(
+                payload.get("total"),
+                "章节目录分页 total",
+                minimum=0,
+            )
+            response_limit = _response_int(
+                payload.get("limit"),
+                "章节目录分页 limit",
+                minimum=1,
+                maximum=100,
+            )
+            response_offset = _response_int(
+                payload.get("offset"),
+                "章节目录分页 offset",
+                minimum=0,
+            )
+            data = payload.get("data")
+            if not isinstance(data, list):
+                raise BangumiApiError("Bangumi 章节目录分页 data 不是数组")
+            page = [self._object(item, "章节目录条目") for item in data]
+            if response_limit != limit or response_offset != offset:
+                raise BangumiApiError("Bangumi 章节目录分页参数与请求不匹配")
+            if len(page) > response_limit:
+                raise BangumiApiError("Bangumi 章节目录分页返回条目超过 limit")
+            if page and response_offset + len(page) > total:
+                raise BangumiApiError("Bangumi 章节目录分页条目超过 total")
+            result.extend(page)
+            offset += len(page)
+            if offset >= total:
+                return result
+            if not page:
+                raise BangumiApiError("Bangumi 章节目录分页提前结束")
+
+    def get_episode_collection(self, episode_id: int) -> dict[str, Any]:
+        """读取当前 Token 用户对单集的精确收藏状态。"""
+
+        return self._object(
+            self._request_json(
+                "GET",
+                f"/v0/users/-/collections/-/episodes/{episode_id}",
+            ),
+            "单集章节收藏",
+        )
+
     def set_collection_type(self, subject_id: int, collection_type: int) -> None:
         self._request_json(
             "POST",
@@ -222,6 +300,7 @@ class BangumiClient:
             raise BangumiApiError(
                 f"Bangumi API 返回 HTTP {response.status_code}{detail}",
                 status_code=response.status_code,
+                retry_after_seconds=_retry_after_seconds(response),
             )
         if response.status_code == 204:
             return None
@@ -287,3 +366,24 @@ def _response_int(
         )
     except ValueError as error:
         raise BangumiApiError(str(error)) from None
+
+
+def _retry_after_seconds(response: requests.Response) -> float | None:
+    headers = getattr(response, "headers", {})
+    value = headers.get("Retry-After") if isinstance(headers, Mapping) else None
+    if not isinstance(value, str) or not value.strip():
+        return None
+    clean = value.strip()
+    try:
+        seconds = float(clean)
+    except ValueError:
+        try:
+            retry_at = parsedate_to_datetime(clean)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=timezone.utc)
+        seconds = (retry_at - datetime.now(timezone.utc)).total_seconds()
+    if seconds < 0 or seconds > 86_400:
+        return None
+    return seconds
