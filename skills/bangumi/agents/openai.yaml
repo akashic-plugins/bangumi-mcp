@@ -1,4 +1,4 @@
 interface:
   display_name: "Bangumi"
-  short_description: "查询 Bangumi 收藏，并在逐次确认后安全更新观看状态"
-  default_prompt: "Use $bangumi to check my collection status and safely prepare any requested update."
+  short_description: "查询 Bangumi 收藏、安全更新观看状态并解释计划放送提醒"
+  default_prompt: "Use $bangumi to check my collection status, explain scheduled airing alerts, and safely prepare any requested update."
