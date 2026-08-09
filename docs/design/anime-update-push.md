@@ -111,7 +111,7 @@
 enabled = true
 notify_before_minutes = 0
 display_timezone = "Asia/Shanghai"
-anilist_token = ""
+anilist_token = "<AniList Access Token>"
 
 [anime_push.media_id_overrides]
 "501963" = 123456
@@ -122,7 +122,7 @@ anilist_token = ""
 - `notify_before_minutes=0` 表示从计划放送时刻开始等待投递；大于 `0` 表示提前 N 分钟。
 - `notify_before_minutes` 必须是 `0..1440` 的整数，`bool` 不得作为整数接受。
 - `display_timezone` 只影响文案展示，不影响绝对时间比较；必须通过 `zoneinfo` 验证。
-- `anilist_token` 可选，但无论是否为空都只能存在 plugin-data 私密配置中。
+- 启用 `anime_push` 必须提供非空的 AniList Access Token；该 Token 只能存在 plugin-data 私密配置中。
 - `media_id_overrides` 的 key 是 Bangumi subject ID，value 是 AniList media ID；两者必须是正整数。
 
 ### 6.2 Source 声明
@@ -362,7 +362,7 @@ Akashic Core 只在真实外部送达后调用成功 ACK。dispatch 失败时 pe
 | 网络超时、连接失败、`5xx` | 保留旧快照；15 分钟起指数退避，最高 6 小时并加入抖动 |
 | `429` | 优先遵守 `0..86400` 秒的合法 `Retry-After`，否则使用相同指数退避 |
 | Bangumi `401/403` | 记录配置故障，24 小时后重试；不输出 Token |
-| AniList `401/403` | 显式配置 Token 时记录配置故障，不静默回退匿名；未配置 Token 时记录远端拒绝并停止高频重试 |
+| AniList `401/403` | 记录 Token 配置故障，不静默回退匿名访问，24 小时后重试 |
 | 单个 subject 失败 | 保留该 subject 旧状态，其他 subject 可提交成功结果 |
 | 在看列表失败 | 不改变 active/inactive 集合 |
 | 映射冲突 | 标记 mapping invalid，不生成提醒 |
@@ -379,7 +379,7 @@ Akashic Core 只在真实外部送达后调用成功 ACK。dispatch 失败时 pe
 
 ## 11. 隐私和日志
 
-- Bangumi Access Token 和可选 AniList Token 只存在 plugin-data 的 `config.local.toml`。
+- Bangumi Access Token 和 AniList Access Token 只存在 plugin-data 的 `config.local.toml`；启用 `anime_push` 时两者都必须配置。
 - Token 不得进入 Git、命令参数、异常正文、对象 repr、MCP 返回或日志。
 - HTTP 错误详情沿用现有 Bangumi Token 替换，并为 AniList Token 增加相同脱敏。
 - 日志只记录 subject ID、episode ID、AniList media ID、状态转换、请求分类、HTTP 状态码和退避时间。
