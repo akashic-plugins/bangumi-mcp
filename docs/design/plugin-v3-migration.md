@@ -156,7 +156,29 @@ V3 里有两条路，**推荐方案 A**：
 ### 进度
 
 - Phase 0：**已完成**（`plugin.py` V3 骨架、`bangumi/` 包、工具目录与 11 个工具发现合同、契约与 `apply` 接线测试、CI 改为 `plugin-v3`）。工具执行仍是明确的 `ToolExecutionError` 占位，领域接入在 Phase 2。
-- Phase 1–4：未开始。
+- Phase 1：**已完成**（`configure.py`、固定输入契约、凭据引用、旧 TOML 转换、配置文档）。`bangumi/config.py` 的旧 TOML 运行时加载器暂时保留给现有测试，Phase 2 接入工具时替换为 `bangumi/settings.py`。
+- Phase 2–4：未开始。
+
+### 固定输入的字段约定（Phase 1 定稿）
+
+```jsonc
+{
+  "access_token": { "path": ["<credential-id>", "<revision>"] },
+  "user_agent": "akashic-plugins/bangumi-mcp/0.6.0 (...)",
+  "anime_push": {
+    "enabled": false,
+    "notify_before_minutes": 0,
+    "display_timezone": "Asia/Shanghai",
+    "anilist_token": { "path": ["<credential-id>", "<revision>"] },
+    // JSON 只有字符串键；插件解析时转回 int。
+    "media_id_overrides": { "501963": 123456 }
+  }
+}
+```
+
+- `parse_settings(ctx.config)` 拒绝明文 Token（字符串形式直接报错），只接受 `CredentialRef`。
+- 旧 TOML 与普通模式都在**写入前**归一化并校验（`notify_before_minutes` 边界、IANA 时区、正整数 ID、未知字段），避免把无效值固化进固定输入。
+- `configure.py` 普通模式只从环境变量取凭据，不接受命令行明文；`--upgrade` 的恢复点与旧文件退役全部由宿主 `upgrade_config` 负责。
 
 ### Phase 0 — 契约与骨架（可独立验证）
 

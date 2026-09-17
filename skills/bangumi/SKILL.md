@@ -5,7 +5,7 @@ description: 分页查询用户的 Bangumi 收藏列表、单个条目状态和�
 
 # Bangumi
 
-使用 `bangumi` MCP 查询收藏，并严格执行只读大量查询确认和一次一确认的写入流程。
+使用本插件提供的工具查询收藏，并严格执行只读大量查询确认和一次一确认的写入流程。
 
 ## 收藏列表
 
@@ -53,9 +53,9 @@ description: 分页查询用户的 Bangumi 收藏列表、单个条目状态和�
 - 只能说该集“计划放送”，不能说某个流媒体、字幕组或下载源已经上线。
 - 提醒可能因 Akashic proactive tick、会话繁忙或外部 channel 状态延后，不要把实际送达时间解释为计划时间发生变化。
 - 标题和正文中的绝对时间及其时区是权威展示，不要改写为“刚刚”“N 分钟后”等相对时间。
-- `get_anime_update_alerts` 和 `acknowledge_anime_update_alerts` 由 Akashic 主动投递链路调用。模型不得为了查询、重放、跳过或修改提醒而手动调用它们。
-- 用户想停止提醒时，说明应在 plugin-data 私密配置中设置 `[anime_push].enabled = false`；不要删除或重建提醒数据库。
+- `get_anime_update_alerts` 只读返回本地已到期的放送事件；`acknowledge_anime_update_alerts` 只在用户明确要求清理这些事件时调用。当前版本不会自动把这些事件发成提醒，模型不要声称已经主动通知过用户。
+- 用户想停止抓取提醒时，说明应在 Akashic `main.py setup` 里把 `anime_push.enabled` 设为关闭；不要删除或重建提醒数据库。
 
 ## 凭据
 
-不要请求用户在对话中粘贴 Access Token。Token 只应写入 Akashic 插件数据目录的 `config.local.toml`，不得出现在回复、日志、命令参数或工具结果中。
+不要请求用户在对话中粘贴 Access Token。Token 由用户通过 Akashic `main.py setup` 写入私有凭据库，不得出现在回复、日志、命令参数或工具结果中。配置与升级只能由用户显式执行，模型不得代替用户运行配置程序。

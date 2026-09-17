@@ -15,10 +15,11 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass
 from typing import Generic, Literal, Protocol, TypeVar
 
 try:  # 宿主运行时提供。
-    from agent.plugin_composition import Context, Effect, ServiceKey
+    from agent.plugin_composition import Context, CredentialRef, Effect, ServiceKey
 except ModuleNotFoundError:  # pragma: no cover - 只在没有宿主 SDK 的离线环境触发
     _T = TypeVar("_T")
 
@@ -44,6 +45,12 @@ except ModuleNotFoundError:  # pragma: no cover - 只在没有宿主 SDK 的离�
 
     class Effect(Protocol):  # type: ignore[no-redef]
         """离线 fallback：只用于类型标注，不做静态检查。"""
+
+    @dataclass(frozen=True, slots=True)
+    class CredentialRef:  # type: ignore[no-redef]
+        """离线回退：与宿主的不可变凭据引用结构一致。"""
+
+        path: tuple[str, ...]
 
 
 TOOLS_SERVICE_NAME = "tools.v1"
@@ -203,6 +210,7 @@ __all__ = [
     "Capture",
     "ContentPart",
     "Context",
+    "CredentialRef",
     "Effect",
     "InstalledAsset",
     "InstalledAssets",

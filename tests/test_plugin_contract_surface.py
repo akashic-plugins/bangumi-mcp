@@ -258,4 +258,4 @@ def test_skill_preserves_collection_list_boundaries() -> None:
     assert "prepare 和 execute 禁止在同一轮调用" in skill
     assert "计划放送" in skill
     assert "不能说某个流媒体" in skill
-    assert "不得为了查询、重放、跳过或修改提醒而手动调用" in skill
+    assert "模型不要声称已经主动通知过用户" in skill
