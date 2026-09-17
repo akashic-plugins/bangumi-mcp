@@ -21,7 +21,9 @@ __all__ = [
     "DEFAULT_USER_AGENT",
     "AnimePushSettings",
     "BangumiConfigError",
+    "BangumiRuntimeConfig",
     "BangumiSettings",
+    "TokenProvider",
     "build_config_values",
     "parse_legacy_toml",
     "parse_settings",
@@ -43,6 +45,8 @@ _PUSH_KEYS = (
     "media_id_overrides",
     ANILIST_TOKEN_KEY,
 )
+
+TokenProvider = Callable[[], str]
 
 
 class BangumiConfigError(ValueError):
@@ -69,6 +73,14 @@ class BangumiSettings:
     access_token: CredentialRef = field(repr=False)
     user_agent: str = DEFAULT_USER_AGENT
     anime_push: AnimePushSettings = field(default_factory=AnimePushSettings)
+
+
+@dataclass(frozen=True)
+class BangumiRuntimeConfig:
+    """运行时客户端配置；Token 通过 provider 在请求时取得，不长期持有。"""
+
+    token_provider: TokenProvider = field(repr=False)
+    user_agent: str = DEFAULT_USER_AGENT
 
 
 SaveCredential = Callable[[str], CredentialRef]

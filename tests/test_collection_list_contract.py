@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from bangumi.tools import TOOL_CATALOG
+from tests._catalog import discovery_catalog
 
 REPO = Path(__file__).resolve().parents[1]
+CATALOG = discovery_catalog()
 
 
 def test_catalog_lists_collection_list_tool_family() -> None:
-    names = set(TOOL_CATALOG.names)
+    names = set(CATALOG.names)
 
     assert names == {
         "commit_prepared_update",
@@ -26,7 +27,7 @@ def test_catalog_lists_collection_list_tool_family() -> None:
 
 
 def test_list_collections_parameters_exclude_paging_knobs() -> None:
-    schema = TOOL_CATALOG["list_collections"].parameters
+    schema = CATALOG["list_collections"].parameters
     properties = schema["properties"]
 
     assert "limit" not in properties
@@ -50,13 +51,13 @@ def test_list_collections_parameters_exclude_paging_knobs() -> None:
 
 
 def test_continue_collection_query_parameters_are_opaque() -> None:
-    schema = TOOL_CATALOG["continue_collection_query"].parameters
+    schema = CATALOG["continue_collection_query"].parameters
 
     assert set(schema["properties"]) == {"query_id"}
 
 
 def test_prepare_collection_query_parameters() -> None:
-    schema = TOOL_CATALOG["prepare_collection_query"].parameters
+    schema = CATALOG["prepare_collection_query"].parameters
 
     assert set(schema["properties"]) == {
         "subject_type",
@@ -70,7 +71,7 @@ def test_prepare_collection_query_parameters() -> None:
 
 
 def test_execute_prepared_collection_query_parameters() -> None:
-    schema = TOOL_CATALOG["execute_prepared_collection_query"].parameters
+    schema = CATALOG["execute_prepared_collection_query"].parameters
 
     assert set(schema["properties"]) == {
         "confirmation_id",
@@ -79,16 +80,16 @@ def test_execute_prepared_collection_query_parameters() -> None:
 
 
 def test_count_collections_parameters() -> None:
-    schema = TOOL_CATALOG["count_collections"].parameters
+    schema = CATALOG["count_collections"].parameters
 
     assert set(schema["properties"]) == {"subject_type", "status"}
 
 
 def test_alert_parameters() -> None:
-    fetch_schema = TOOL_CATALOG["get_anime_update_alerts"].parameters
+    fetch_schema = CATALOG["get_anime_update_alerts"].parameters
     assert set(fetch_schema["properties"]) == {"offset", "limit"}
 
-    ack_schema = TOOL_CATALOG["acknowledge_anime_update_alerts"].parameters
+    ack_schema = CATALOG["acknowledge_anime_update_alerts"].parameters
     assert set(ack_schema["properties"]) == {"event_ids", "feedback"}
 
 

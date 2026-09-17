@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 
 from bangumi.client import API_BASE_URL, BangumiApiError, BangumiClient
-from bangumi.config import BangumiRuntimeConfig
+from bangumi.settings import BangumiRuntimeConfig
 
 
 class FakeResponse:
@@ -39,7 +39,7 @@ class FakeSession:
 def client(session: FakeSession, token: str = "secret-token") -> BangumiClient:
     return BangumiClient(
         BangumiRuntimeConfig(
-            access_token=token,
+            token_provider=lambda: token,
             user_agent="akashic-plugins/bangumi-mcp/0.5.0 (https://example.test)",
         ),
         session=session,

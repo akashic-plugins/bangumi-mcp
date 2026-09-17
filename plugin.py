@@ -10,8 +10,10 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from bangumi._host_contract import (
+    CREDENTIALS,
     INSTALLED_ASSETS,
     TOOLS,
     BoundTool,
@@ -19,25 +21,34 @@ from bangumi._host_contract import (
     Context,
     ToolResult,
 )
-from bangumi.tools import TOOL_CATALOG, ToolCatalog, ToolEntry, ToolExecutionError
+from bangumi.runtime import build_runtime
+from bangumi.settings import parse_settings
+from bangumi.tools import ToolCatalog, ToolEntry
 
 api_version = 3
 name = "bangumi"
 version = "0.6.0"
 desc = "查询 Bangumi 收藏与观看进度；写入需逐字确认"
 
-inject = (TOOLS, INSTALLED_ASSETS)
+inject = (TOOLS, INSTALLED_ASSETS, CREDENTIALS)
 
 
 async def apply(ctx: Context) -> None:
-    """注册本插件的 Skill 资产与工具目录。"""
+    """解析固定配置，注册 Skill 资产与工具目录。"""
 
+    settings = parse_settings(ctx.config)
+    runtime = build_runtime(
+        settings=settings,
+        data_dir=Path(ctx.data_root),
+        credentials=ctx.require(CREDENTIALS),
+        ctx=ctx,
+    )
     await ctx.require(INSTALLED_ASSETS).register(ctx, "skills", "skills")
-    await _register_tool_catalog(ctx, TOOL_CATALOG)
+    await _register_tool_catalog(ctx, runtime.catalog())
 
 
 async def _register_tool_catalog(ctx: Context, catalog: ToolCatalog) -> None:
-    """把一个静态目录注册成宿主工具；每个条目固定自己的发现合同。"""
+    """把一个目录注册成宿主工具；每个条目固定自己的发现合同。"""
 
     tools = ctx.require(TOOLS)
     _ = await tools.declare_group(ctx, always_on=True, description=desc)
@@ -54,11 +65,7 @@ async def _register_tool_catalog(ctx: Context, catalog: ToolCatalog) -> None:
 
 
 class _BoundBangumiTool:
-    """一次工具 binding 的窄实现；领域实现推迟到 Phase 2 接入。
-
-    Phase 0 只冻结发现合同：工具可被宿主列出并校验 schema，执行会明确失败，
-    不会静默返回伪造结果。
-    """
+    """一次工具 binding 的窄实现；执行时在凭据租约内调用运行时。"""
 
     def __init__(self, entry: ToolEntry) -> None:
         self._entry = entry
@@ -84,10 +91,8 @@ class _BoundBangumiTool:
         return arguments
 
     async def invoke(self, key: str, arguments: Mapping[str, object]) -> ToolResult:
-        del key, arguments
-        raise ToolExecutionError(
-            f"工具 {self._entry.name} 的领域实现尚未接入（Phase 2）"
-        )
+        del key
+        return await self._entry.execute(arguments)
 
     async def query(self, key: str) -> ToolResult | None:
         del key

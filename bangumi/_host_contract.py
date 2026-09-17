@@ -55,6 +55,7 @@ except ModuleNotFoundError:  # pragma: no cover - 只在没有宿主 SDK 的离�
 
 TOOLS_SERVICE_NAME = "tools.v1"
 INSTALLED_ASSETS_SERVICE_NAME = "core.installed_assets.v1"
+CREDENTIALS_SERVICE_NAME = "core.credentials"
 
 _TOOL_NAME = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
@@ -186,8 +187,33 @@ class InstalledAssets(Protocol):
     ) -> Effect: ...
 
 
+class ProviderClient(Protocol):
+    """一次已授权的凭据租约；``credential`` 只读取本次授权内的值。"""
+
+    def credential(self, ref: CredentialRef) -> str: ...
+
+    async def aclose(self) -> None: ...
+
+
+class CredentialClients(Protocol):
+    """``core.credentials`` 的短租约入口。"""
+
+    async def create(
+        self,
+        ctx: Context,
+        refs: Mapping[str, CredentialRef],
+    ) -> ProviderClient: ...
+
+    def open(
+        self,
+        ctx: Context,
+        refs: Mapping[str, CredentialRef],
+    ) -> AbstractAsyncContextManager[ProviderClient]: ...
+
+
 TOOLS = ServiceKey[ToolCatalogService](TOOLS_SERVICE_NAME)
 INSTALLED_ASSETS = ServiceKey[InstalledAssets](INSTALLED_ASSETS_SERVICE_NAME)
+CREDENTIALS = ServiceKey[CredentialClients](CREDENTIALS_SERVICE_NAME)
 
 
 def tool_name_error(name: object) -> str | None:
@@ -201,6 +227,8 @@ def tool_name_error(name: object) -> str | None:
 
 
 __all__ = [
+    "CREDENTIALS",
+    "CREDENTIALS_SERVICE_NAME",
     "INSTALLED_ASSETS",
     "INSTALLED_ASSETS_SERVICE_NAME",
     "TOOLS",
@@ -210,11 +238,13 @@ __all__ = [
     "Capture",
     "ContentPart",
     "Context",
+    "CredentialClients",
     "CredentialRef",
     "Effect",
     "InstalledAsset",
     "InstalledAssets",
     "OpenTool",
+    "ProviderClient",
     "ServiceKey",
     "ToolCatalogService",
     "ToolRef",

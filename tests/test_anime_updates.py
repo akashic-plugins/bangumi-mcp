@@ -17,7 +17,7 @@ from bangumi.anime_updates import (
     CatalogSubject,
 )
 from bangumi.client import BangumiApiError
-from bangumi.config import AnimePushRuntimeConfig
+from bangumi.settings import AnimePushSettings
 
 NOW = datetime(2026, 8, 5, 12, 0, tzinfo=timezone.utc)
 
@@ -212,14 +212,14 @@ def coordinator(
     bangumi: FakeBangumi,
     *,
     anilist: FakeAniList | None = None,
-    config: AnimePushRuntimeConfig | None = None,
+    config: AnimePushSettings | None = None,
     now: datetime = NOW,
 ) -> AnimeUpdateCoordinator:
     return AnimeUpdateCoordinator(
         store,
         bangumi,
         anilist or FakeAniList(),
-        config or AnimePushRuntimeConfig(enabled=True),
+        config or AnimePushSettings(enabled=True),
         clock=lambda: now,
         jitter=lambda seconds: seconds,
     )
@@ -416,7 +416,7 @@ def test_catalog_and_schedule_refresh_cache_successive_future_episodes(
     store = store_at(tmp_path)
     bangumi = FakeBangumi()
     anilist = FakeAniList(next_episode=7)
-    config = AnimePushRuntimeConfig(
+    config = AnimePushSettings(
         enabled=True,
         media_id_overrides={42: 154587},
     )
@@ -457,7 +457,7 @@ def test_automatic_mapping_requires_unique_strict_candidate(tmp_path: Path) -> N
 def test_missing_explicit_override_invalidates_old_mapping(tmp_path: Path) -> None:
     store = store_at(tmp_path)
     seed_schedule(store)
-    config = AnimePushRuntimeConfig(
+    config = AnimePushSettings(
         enabled=True,
         media_id_overrides={42: 999999},
     )
@@ -536,7 +536,7 @@ def test_due_interval_is_not_jittered(tmp_path: Path) -> None:
         store,
         FakeBangumi(),
         FakeAniList(),
-        AnimePushRuntimeConfig(enabled=True),
+        AnimePushSettings(enabled=True),
         clock=lambda: NOW,
         jitter=lambda seconds: seconds * 2,
     )

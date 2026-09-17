@@ -1,15 +1,23 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 import plugin
-from bangumi._host_contract import INSTALLED_ASSETS, TOOLS
-from bangumi.tools import TOOL_CATALOG, ToolExecutionError
+from bangumi._host_contract import (
+    CREDENTIALS,
+    INSTALLED_ASSETS,
+    TOOLS,
+    CredentialRef,
+)
+from bangumi.client import BangumiClient
+from tests._catalog import discovery_catalog
 
 
 @dataclass
@@ -97,8 +105,45 @@ class _AssetServiceRecorder:
         return object()
 
 
+class _Lease:
+    def __init__(self, values: Mapping[str, str]) -> None:
+        self._values = values
+        self.closed = False
+
+    def credential(self, ref: CredentialRef) -> str:
+        return self._values[ref.path[0]]
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class _CredentialServiceRecorder:
+    def __init__(self, values: Mapping[str, str]) -> None:
+        self._values = values
+        self.opened: list[Mapping[str, CredentialRef]] = []
+        self.leases: list[_Lease] = []
+
+    def open(
+        self,
+        ctx: object,
+        refs: Mapping[str, CredentialRef],
+    ) -> Any:
+        del ctx
+        self.opened.append(dict(refs))
+        lease = _Lease(self._values)
+        self.leases.append(lease)
+
+        @asynccontextmanager
+        async def manager() -> AsyncIterator[_Lease]:
+            yield lease
+
+        return manager()
+
+
 @dataclass
 class _FakeContext:
+    config: Mapping[str, object]
+    data_root: Path
     services: dict[object, object] = field(default_factory=dict)
 
     def require(self, key: object) -> object:
@@ -108,52 +153,146 @@ class _FakeContext:
             raise AssertionError(f"apply 请求了未提供的 service: {key!r}") from error
 
 
-def _run_apply() -> tuple[_ToolServiceRecorder, _AssetServiceRecorder]:
+_CONFIG = {
+    "access_token": CredentialRef(("bangumi-token", "rev")),
+    "user_agent": "test-agent/1.0",
+}
+
+
+def _stub_api(path: str) -> object:
+    if path == "/v0/me":
+        return {"username": "tester"}
+    if path.startswith("/v0/users/"):
+        return {
+            "total": 1,
+            "limit": 10,
+            "offset": 0,
+            "data": [
+                {
+                    "subject_id": 42,
+                    "subject_type": 2,
+                    "rate": 8,
+                    "type": 3,
+                    "ep_status": 5,
+                    "vol_status": 0,
+                    "updated_at": "2026-08-03T12:00:00+08:00",
+                    "private": False,
+                    "subject": {
+                        "id": 42,
+                        "type": 2,
+                        "name": "Test Anime",
+                        "name_cn": "测试动画",
+                        "eps": 12,
+                        "volumes": 0,
+                    },
+                }
+            ],
+        }
+    raise AssertionError(f"未预期的请求: {path}")
+
+
+def _run_apply(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    config: Mapping[str, object] | None = None,
+) -> tuple[_ToolServiceRecorder, _AssetServiceRecorder, _CredentialServiceRecorder]:
     tools = _ToolServiceRecorder()
     assets = _AssetServiceRecorder()
-    ctx = _FakeContext(services={TOOLS: tools, INSTALLED_ASSETS: assets})
+    credentials = _CredentialServiceRecorder({"bangumi-token": "secret-token"})
+    ctx = _FakeContext(
+        config=config if config is not None else _CONFIG,
+        data_root=tmp_path,
+        services={
+            TOOLS: tools,
+            INSTALLED_ASSETS: assets,
+            CREDENTIALS: credentials,
+        },
+    )
+    monkeypatch.setattr(
+        BangumiClient,
+        "_request_json",
+        lambda self, method, path, **kwargs: _stub_api(path),
+    )
     asyncio.run(plugin.apply(ctx))  # type: ignore[arg-type]
-    return tools, assets
+    return tools, assets, credentials
 
 
-def test_apply_registers_skills_and_every_catalog_tool() -> None:
-    tools, assets = _run_apply()
+def test_apply_registers_skills_and_every_catalog_tool(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tools, assets, _ = _run_apply(tmp_path, monkeypatch)
+    expected = discovery_catalog()
 
     assert assets.registered == [("skills", "skills")]
     assert len(tools.declare_groups) == 1
     assert tools.declare_groups[0].always_on is True
     assert tools.declare_groups[0].description == plugin.desc
-    assert [call.name for call in tools.registered] == list(TOOL_CATALOG.names)
+    assert [call.name for call in tools.registered] == list(expected.names)
     for call in tools.registered:
-        entry = TOOL_CATALOG[call.name]
+        entry = expected[call.name]
         assert call.parameters == entry.parameters
         assert call.description == entry.description
         assert call.idempotent is entry.idempotent
         assert call.risk == entry.risk
 
 
-def test_each_registered_open_yields_a_working_binding() -> None:
-    tools, _ = _run_apply()
-
-    async def exercise() -> None:
-        for call in tools.registered:
-            async with call.open({}) as bound:
-                assert bound.idempotent is call.idempotent
-                assert await bound.prepare({"subject_id": 1}) == {"subject_id": 1}
-                assert await bound.query("key") is None
-
-    asyncio.run(exercise())
-
-
-def test_phase0_bound_tool_fails_loudly_instead_of_faking_results() -> None:
-    tools, _ = _run_apply()
+def test_registered_tool_invocation_reads_credential_lease(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tools, _, credentials = _run_apply(tmp_path, monkeypatch)
     call = next(
-        item for item in tools.registered if item.name == "count_collections"
+        item for item in tools.registered if item.name == "list_collections"
+    )
+
+    async def exercise() -> object:
+        async with call.open({}) as bound:
+            return await bound.invoke("key", {"subject_type": "anime"})
+
+    result = asyncio.run(exercise())
+
+    assert result.outcome == "success"
+    assert '"total":1' in result.parts[0].text
+    assert credentials.opened == [
+        {"access_token": CredentialRef(("bangumi-token", "rev"))}
+    ]
+    assert credentials.leases[0].closed is True
+
+
+def test_tool_validation_error_returns_error_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tools, _, _ = _run_apply(tmp_path, monkeypatch)
+    call = next(
+        item for item in tools.registered if item.name == "get_collection_status"
+    )
+
+    async def exercise() -> object:
+        async with call.open({}) as bound:
+            return await bound.invoke("key", {})
+
+    result = asyncio.run(exercise())
+
+    assert result.outcome == "error"
+    assert "subject_id" in result.parts[0].text
+
+
+def test_bound_tool_exposes_identity_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tools, _, _ = _run_apply(tmp_path, monkeypatch)
+    call = next(
+        item for item in tools.registered if item.name == "get_collection_status"
     )
 
     async def exercise() -> None:
         async with call.open({}) as bound:
-            with pytest.raises(ToolExecutionError):
-                await bound.invoke("key", {})
+            assert bound.idempotent is True
+            assert await bound.prepare({"subject_id": 1}) == {"subject_id": 1}
+            assert await bound.query("key") is None
 
     asyncio.run(exercise())

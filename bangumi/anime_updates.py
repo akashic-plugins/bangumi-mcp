@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 
 from .anilist import AniListApiError, AniListNotFoundError
 from .client import BangumiApiError
-from .config import AnimePushRuntimeConfig
+from .settings import AnimePushSettings
 
 logger = logging.getLogger(__name__)
 SCHEMA_VERSION = "1"
@@ -774,7 +774,7 @@ class AnimeUpdateCoordinator:
         store: AnimeUpdateStore,
         bangumi: BangumiApi,
         anilist: AniListApi,
-        config: AnimePushRuntimeConfig,
+        config: AnimePushSettings,
         *,
         clock: Callable[[], datetime] | None = None,
         jitter: Callable[[float], float] | None = None,

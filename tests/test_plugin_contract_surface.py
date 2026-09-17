@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from bangumi.tools import TOOL_CATALOG
+from tests._catalog import discovery_catalog
 
 REPO = Path(__file__).resolve().parents[1]
 PLUGIN = REPO / "plugin.py"
@@ -20,6 +20,9 @@ EXPECTED_TOOLS = {
     "prepare_collection_query",
     "prepare_collection_status_update",
 }
+
+
+CATALOG = discovery_catalog()
 
 
 def _plugin_tree() -> ast.Module:
@@ -109,7 +112,8 @@ def test_plugin_declares_skills_and_tools() -> None:
     source = PLUGIN.read_text(encoding="utf-8")
 
     assert '"skills", "skills"' in source
-    assert "TOOL_CATALOG" in source
+    assert "runtime.catalog()" in source
+    assert "parse_settings" in source
     assert (REPO / "skills/bangumi/SKILL.md").is_file()
     assert (REPO / "requirements.txt").is_file()
 
@@ -135,16 +139,16 @@ def test_plugin_injects_required_service_keys() -> None:
         for element in inject.value.elts
         if isinstance(element, ast.Name)
     ]
-    assert names == ["TOOLS", "INSTALLED_ASSETS"]
+    assert names == ["TOOLS", "INSTALLED_ASSETS", "CREDENTIALS"]
 
 
 def test_tool_catalog_lists_exactly_the_public_tools() -> None:
-    assert set(TOOL_CATALOG.names) == EXPECTED_TOOLS
-    assert len(TOOL_CATALOG.names) == len(set(TOOL_CATALOG.names))
+    assert set(CATALOG.names) == EXPECTED_TOOLS
+    assert len(CATALOG.names) == len(set(CATALOG.names))
 
 
 def test_tool_catalog_schemas_are_object_shaped() -> None:
-    for entry in TOOL_CATALOG.entries:
+    for entry in CATALOG.entries:
         assert entry.parameters["type"] == "object", entry.name
         assert entry.description, entry.name
         assert entry.risk in {
@@ -155,7 +159,7 @@ def test_tool_catalog_schemas_are_object_shaped() -> None:
 
 
 def test_only_commit_tool_has_external_side_effect() -> None:
-    risk_by_name = {entry.name: entry.risk for entry in TOOL_CATALOG.entries}
+    risk_by_name = {entry.name: entry.risk for entry in CATALOG.entries}
 
     assert risk_by_name["commit_prepared_update"] == "external-side-effect"
     assert risk_by_name["acknowledge_anime_update_alerts"] == "read-write"
@@ -168,7 +172,7 @@ def test_only_commit_tool_has_external_side_effect() -> None:
 
 
 def test_list_collections_schema_preserves_display_boundaries() -> None:
-    schema = TOOL_CATALOG["list_collections"].parameters
+    schema = CATALOG["list_collections"].parameters
     properties = schema["properties"]
 
     assert "limit" not in properties
@@ -192,7 +196,7 @@ def test_list_collections_schema_preserves_display_boundaries() -> None:
 
 
 def test_prepare_query_schema_matches_confirmation_contract() -> None:
-    schema = TOOL_CATALOG["prepare_collection_query"].parameters
+    schema = CATALOG["prepare_collection_query"].parameters
 
     assert set(schema["properties"]) == {
         "subject_type",
@@ -205,11 +209,11 @@ def test_prepare_query_schema_matches_confirmation_contract() -> None:
     }
     assert set(schema.get("required", ())) == set()
 
-    continue_schema = TOOL_CATALOG["continue_collection_query"].parameters
+    continue_schema = CATALOG["continue_collection_query"].parameters
     assert set(continue_schema["properties"]) == {"query_id"}
     assert continue_schema["required"] == ["query_id"]
 
-    count_schema = TOOL_CATALOG["count_collections"].parameters
+    count_schema = CATALOG["count_collections"].parameters
     assert set(count_schema["properties"]) == {"subject_type", "status"}
 
 
@@ -218,7 +222,7 @@ def test_confirmation_tool_schemas_require_literal_text() -> None:
         "execute_prepared_collection_query",
         "commit_prepared_update",
     ):
-        schema = TOOL_CATALOG[name].parameters
+        schema = CATALOG[name].parameters
 
         assert set(schema["properties"]) == {
             "confirmation_id",
@@ -231,11 +235,11 @@ def test_confirmation_tool_schemas_require_literal_text() -> None:
 
 
 def test_alert_tool_schemas_match_store_limits() -> None:
-    fetch_schema = TOOL_CATALOG["get_anime_update_alerts"].parameters
+    fetch_schema = CATALOG["get_anime_update_alerts"].parameters
     assert set(fetch_schema["properties"]) == {"offset", "limit"}
     assert fetch_schema["properties"]["limit"]["maximum"] == 50
 
-    ack_schema = TOOL_CATALOG["acknowledge_anime_update_alerts"].parameters
+    ack_schema = CATALOG["acknowledge_anime_update_alerts"].parameters
     assert set(ack_schema["properties"]) == {"event_ids", "feedback"}
     assert ack_schema["required"] == ["event_ids"]
 

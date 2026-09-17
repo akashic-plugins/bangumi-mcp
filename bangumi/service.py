@@ -3,9 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from math import ceil
 from numbers import Real
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
-from .client import BangumiApiError, BangumiClient
 from .confirmation import ConfirmationStore, PreparedUpdate
 from .query import (
     CollectionQueryOperation,
@@ -16,6 +15,11 @@ from .query import (
     QueryConfirmationStore,
     QueryStateError,
 )
+
+if TYPE_CHECKING:
+    from .client import BangumiApiError, BangumiClient
+else:
+    from .client import BangumiApiError
 
 SUBJECT_ANIME = 2
 EPISODE_WATCHED = 2

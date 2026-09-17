@@ -12,7 +12,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
-from ._host_contract import tool_name_error
+from ._host_contract import ContentPart, ToolResult, tool_name_error
 
 Risk = Literal["read-only", "read-write", "external-side-effect"]
 
@@ -28,8 +28,9 @@ COLLECTION_STATUS_ENUM = [
 QUERY_OPERATION_ENUM = ["list_all", "filter", "analyze"]
 
 
+
 class ToolExecutionError(RuntimeError):
-    """工具还没有接到领域实现，或领域实现拒绝本次调用。"""
+    """工具无法完成本次调用；错误正文会交给调用方。"""
 
 
 @dataclass(frozen=True)
@@ -45,9 +46,20 @@ class ToolEntry:
 
 
 class ToolExecutor(Protocol):
-    """把一次工具调用映射为 JSON 结果正文。"""
+    """把一次工具调用映射为宿主工具结果。"""
 
-    def __call__(self, arguments: Mapping[str, object]) -> object: ...
+    def __call__(self, arguments: Mapping[str, object]) -> ToolResult: ...
+
+
+class Invoker(Protocol):
+    """运行时入口：按方法名执行领域调用并返回工具结果。"""
+
+    async def __call__(
+        self,
+        method: str,
+        *args: object,
+        **kwargs: object,
+    ) -> ToolResult: ...
 
 
 @dataclass(frozen=True)
@@ -112,28 +124,242 @@ def _json_text(payload: object) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
-def _unwired(name: str) -> ToolExecutor:
-    """Phase 0 占位：工具已可发现，但领域实现要到 Phase 2 才接入。"""
+@dataclass(frozen=True)
+class _TextPart:
+    text: str
+    type: str = "text"
 
-    def execute(arguments: Mapping[str, object]) -> object:
-        del arguments
-        raise ToolExecutionError(
-            f"工具 {name} 的领域实现尚未接入（Phase 2）"
-        )
+
+@dataclass(frozen=True)
+class _ToolResult:
+    outcome: Literal["success", "denied", "error", "interrupted"]
+    parts: tuple[ContentPart, ...]
+
+
+def tool_error(message: str) -> ToolResult:
+    """构造一个 error 结果；正文是给模型看的中文说明。"""
+
+    return _ToolResult("error", (_TextPart(message),))
+
+
+def tool_success(payload: object) -> ToolResult:
+    """把领域结果包装成 success 结果正文。"""
+
+    return _ToolResult("success", (_TextPart(_json_text(payload)),))
+
+
+def _require_text(arguments: Mapping[str, object], key: str) -> str:
+    value = arguments.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ToolExecutionError(f"{key} 必须是非空字符串")
+    return value.strip()
+
+
+def _require_int(
+    arguments: Mapping[str, object],
+    key: str,
+    *,
+    minimum: int = 1,
+) -> int:
+    value = arguments.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise ToolExecutionError(f"{key} 必须是大于等于 {minimum} 的整数")
+    return value
+
+
+def _optional_int(
+    arguments: Mapping[str, object],
+    key: str,
+    *,
+    default: int,
+    minimum: int = 0,
+) -> int:
+    value = arguments.get(key)
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise ToolExecutionError(f"{key} 必须是大于等于 {minimum} 的整数")
+    return value
+
+
+def _enum_text(
+    arguments: Mapping[str, object],
+    key: str,
+    allowed: Sequence[str],
+    *,
+    default: str,
+) -> str:
+    value = arguments.get(key)
+    if value is None:
+        value = default
+    if not isinstance(value, str) or value not in allowed:
+        raise ToolExecutionError(f"{key} 必须是 {list(allowed)} 之一")
+    return value
+
+
+def _optional_rating(
+    arguments: Mapping[str, object],
+    key: str,
+) -> int | None:
+    value = arguments.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ToolExecutionError(f"{key} 必须是整数或 null")
+    return value
+
+
+def _string_list(arguments: Mapping[str, object], key: str) -> list[str]:
+    value = arguments.get(key)
+    if not isinstance(value, list) or not value:
+        raise ToolExecutionError(f"{key} 必须是非空字符串数组")
+    result: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            raise ToolExecutionError(f"{key} 只能包含非空字符串")
+        result.append(item.strip())
+    return result
+
+
+def _handler(name: str, invoke: Invoker) -> ToolExecutor:
+    """把工具名绑定到运行时方法；参数在这里显式校验。
+
+    校验失败、凭据不可用或领域错误都返回 error 结果，交给模型说明原因。
+    """
+
+    async def execute(arguments: Mapping[str, object]) -> ToolResult:
+        try:
+            if name == "list_collections":
+                return await invoke(
+                    "list_collections",
+                    subject_type=_subject_type(arguments),
+                    status=_collection_status(arguments),
+                )
+            if name == "count_collections":
+                return await invoke(
+                    "count_collections",
+                    subject_type=_subject_type(arguments),
+                    status=_collection_status(arguments),
+                )
+            if name == "continue_collection_query":
+                return await invoke(
+                    "continue_collection_query",
+                    query_id=_require_text(arguments, "query_id"),
+                )
+            if name == "get_collection_status":
+                return await invoke(
+                    "get_collection_status",
+                    subject_id=_require_int(arguments, "subject_id"),
+                )
+            if name == "prepare_collection_query":
+                return await invoke(
+                    "prepare_collection_query",
+                    subject_type=_subject_type(arguments),
+                    status=_collection_status(arguments),
+                    operation=_enum_text(
+                        arguments,
+                        "operation",
+                        QUERY_OPERATION_ENUM,
+                        default="list_all",
+                    ),
+                    min_rating=_optional_rating(arguments, "min_rating"),
+                    max_rating=_optional_rating(arguments, "max_rating"),
+                    requested_count=_optional_int(
+                        arguments,
+                        "requested_count",
+                        default=10,
+                        minimum=1,
+                    ),
+                    return_all_matches=_flag(arguments, "return_all_matches"),
+                )
+            if name == "execute_prepared_collection_query":
+                return await invoke(
+                    "execute_prepared_collection_query",
+                    confirmation_id=_require_text(arguments, "confirmation_id"),
+                    confirmation_text=_require_text(
+                        arguments,
+                        "confirmation_text",
+                    ),
+                )
+            if name == "prepare_collection_status_update":
+                return await invoke(
+                    "prepare_collection_status_update",
+                    subject_id=_require_int(arguments, "subject_id"),
+                    status=_enum_text(
+                        arguments,
+                        "status",
+                        ("watching", "completed"),
+                        default="",
+                    ),
+                )
+            if name == "prepare_anime_progress_update":
+                return await invoke(
+                    "prepare_anime_progress_update",
+                    subject_id=_require_int(arguments, "subject_id"),
+                    episode_number=_require_int(arguments, "episode_number"),
+                )
+            if name == "commit_prepared_update":
+                return await invoke(
+                    "commit_prepared_update",
+                    confirmation_id=_require_text(arguments, "confirmation_id"),
+                    confirmation_text=_require_text(
+                        arguments,
+                        "confirmation_text",
+                    ),
+                )
+            if name == "get_anime_update_alerts":
+                return await invoke(
+                    "fetch_pending_alerts",
+                    offset=_optional_int(arguments, "offset", default=0),
+                    limit=_optional_int(
+                        arguments,
+                        "limit",
+                        default=50,
+                        minimum=1,
+                    ),
+                )
+            if name == "acknowledge_anime_update_alerts":
+                return await invoke(
+                    "acknowledge_anime_update_alerts",
+                    event_ids=_string_list(arguments, "event_ids"),
+                )
+        except ToolExecutionError as error:
+            return tool_error(str(error))
+        raise ToolExecutionError(f"未知工具: {name}")
 
     return execute
 
 
+def _subject_type(arguments: Mapping[str, object]) -> str:
+    return _enum_text(
+        arguments,
+        "subject_type",
+        SUBJECT_TYPE_ENUM,
+        default="all",
+    )
+
+
+def _collection_status(arguments: Mapping[str, object]) -> str:
+    return _enum_text(
+        arguments,
+        "status",
+        COLLECTION_STATUS_ENUM,
+        default="all",
+    )
+
+
+def _flag(arguments: Mapping[str, object], key: str) -> bool:
+    value = arguments.get(key, False)
+    if not isinstance(value, bool):
+        raise ToolExecutionError(f"{key} 必须是布尔值")
+    return value
+
+
 def build_tool_catalog(
     *,
-    execute: ToolExecutor | None = None,
+    invoke: Invoker,
 ) -> ToolCatalog:
-    """构造工具目录；``execute`` 为空时全部工具使用未接入占位。"""
-
-    def handler(name: str) -> ToolExecutor:
-        if execute is None:
-            return _unwired(name)
-        return execute
+    """构造绑定到运行时调用的工具目录。"""
 
     return ToolCatalog(
         entries=(
@@ -148,7 +374,7 @@ def build_tool_catalog(
                 ),
                 risk="read-only",
                 idempotent=True,
-                execute=handler("list_collections"),
+                execute=_handler("list_collections", invoke),
             ),
             ToolEntry(
                 name="continue_collection_query",
@@ -161,7 +387,7 @@ def build_tool_catalog(
                 ),
                 risk="read-only",
                 idempotent=True,
-                execute=handler("continue_collection_query"),
+                execute=_handler("continue_collection_query", invoke),
             ),
             ToolEntry(
                 name="count_collections",
@@ -174,7 +400,7 @@ def build_tool_catalog(
                 ),
                 risk="read-only",
                 idempotent=True,
-                execute=handler("count_collections"),
+                execute=_handler("count_collections", invoke),
             ),
             ToolEntry(
                 name="get_collection_status",
@@ -187,7 +413,7 @@ def build_tool_catalog(
                 ),
                 risk="read-only",
                 idempotent=True,
-                execute=handler("get_collection_status"),
+                execute=_handler("get_collection_status", invoke),
             ),
             ToolEntry(
                 name="prepare_collection_query",
@@ -209,7 +435,7 @@ def build_tool_catalog(
                 ),
                 risk="read-only",
                 idempotent=True,
-                execute=handler("prepare_collection_query"),
+                execute=_handler("prepare_collection_query", invoke),
             ),
             ToolEntry(
                 name="execute_prepared_collection_query",
@@ -223,7 +449,7 @@ def build_tool_catalog(
                 ),
                 risk="read-only",
                 idempotent=False,
-                execute=handler("execute_prepared_collection_query"),
+                execute=_handler("execute_prepared_collection_query", invoke),
             ),
             ToolEntry(
                 name="prepare_collection_status_update",
@@ -237,7 +463,7 @@ def build_tool_catalog(
                 ),
                 risk="read-only",
                 idempotent=True,
-                execute=handler("prepare_collection_status_update"),
+                execute=_handler("prepare_collection_status_update", invoke),
             ),
             ToolEntry(
                 name="prepare_anime_progress_update",
@@ -251,7 +477,7 @@ def build_tool_catalog(
                 ),
                 risk="read-only",
                 idempotent=True,
-                execute=handler("prepare_anime_progress_update"),
+                execute=_handler("prepare_anime_progress_update", invoke),
             ),
             ToolEntry(
                 name="commit_prepared_update",
@@ -268,7 +494,7 @@ def build_tool_catalog(
                 ),
                 risk="external-side-effect",
                 idempotent=False,
-                execute=handler("commit_prepared_update"),
+                execute=_handler("commit_prepared_update", invoke),
             ),
             ToolEntry(
                 name="get_anime_update_alerts",
@@ -286,7 +512,7 @@ def build_tool_catalog(
                 ),
                 risk="read-only",
                 idempotent=True,
-                execute=handler("get_anime_update_alerts"),
+                execute=_handler("get_anime_update_alerts", invoke),
             ),
             ToolEntry(
                 name="acknowledge_anime_update_alerts",
@@ -304,23 +530,22 @@ def build_tool_catalog(
                 ),
                 risk="read-write",
                 idempotent=True,
-                execute=handler("acknowledge_anime_update_alerts"),
+                execute=_handler("acknowledge_anime_update_alerts", invoke),
             ),
         )
     )
-
-
-TOOL_CATALOG = build_tool_catalog()
 
 
 __all__ = [
     "COLLECTION_STATUS_ENUM",
     "QUERY_OPERATION_ENUM",
     "SUBJECT_TYPE_ENUM",
-    "TOOL_CATALOG",
+    "Invoker",
     "ToolCatalog",
     "ToolEntry",
     "ToolExecutionError",
     "ToolExecutor",
     "build_tool_catalog",
+    "tool_error",
+    "tool_success",
 ]

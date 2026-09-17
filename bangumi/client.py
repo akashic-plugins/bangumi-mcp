@@ -8,7 +8,7 @@ from urllib.parse import quote
 
 import requests
 
-from .config import BangumiRuntimeConfig
+from .settings import BangumiRuntimeConfig
 
 API_BASE_URL = "https://api.bgm.tv"
 REQUEST_TIMEOUT = (3.05, 15.0)
@@ -43,7 +43,7 @@ class BangumiClient:
         *,
         session: HttpTransport | None = None,
     ) -> None:
-        self._token = config.access_token
+        self._token_provider = config.token_provider
         self._user_agent = config.user_agent
         self._session: HttpTransport = session or requests
 
@@ -272,13 +272,16 @@ class BangumiClient:
     ) -> object:
         if not path.startswith("/v0/"):
             raise ValueError(f"Bangumi API path 不受信任: {path}")
+        token = self._token_provider()
+        if not isinstance(token, str) or not token:
+            raise BangumiApiError("缺少 Bangumi Access Token")
         try:
             response = self._session.request(
                 method,
                 f"{API_BASE_URL}{path}",
                 headers={
                     "Accept": "application/json",
-                    "Authorization": f"Bearer {self._token}",
+                    "Authorization": f"Bearer {token}",
                     "User-Agent": self._user_agent,
                 },
                 params=dict(params) if params is not None else None,
@@ -295,7 +298,7 @@ class BangumiClient:
         if allow_not_found and response.status_code == 404:
             return None
         if response.status_code not in expected_status:
-            detail = self._error_detail(response)
+            detail = self._error_detail(response, token)
             raise BangumiApiError(
                 f"Bangumi API 返回 HTTP {response.status_code}{detail}",
                 status_code=response.status_code,
@@ -308,7 +311,7 @@ class BangumiClient:
         except requests.JSONDecodeError:
             raise BangumiApiError("Bangumi API 返回了无效 JSON") from None
 
-    def _error_detail(self, response: requests.Response) -> str:
+    def _error_detail(self, response: requests.Response, token: str) -> str:
         try:
             payload = response.json()
         except requests.JSONDecodeError:
@@ -319,7 +322,7 @@ class BangumiClient:
         for key in ("title", "description", "details"):
             value = payload.get(key)
             if isinstance(value, str) and value.strip():
-                safe = value.replace(self._token, "[REDACTED]").strip()[:300]
+                safe = value.replace(token, "[REDACTED]").strip()[:300]
                 parts.append(safe)
         return f": {'; '.join(parts)}" if parts else ""
 
