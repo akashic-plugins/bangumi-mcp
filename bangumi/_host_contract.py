@@ -229,6 +229,46 @@ class PluginTimers(Protocol):
     def schedule(self, deadline: datetime) -> TimerHandle: ...
 
 
+class BoundAlertSource(Protocol):
+    """``eventmail.alert_source.v1``：上报告警并查询投递终态。"""
+
+    def report(
+        self,
+        *,
+        event_id: str,
+        payload: Mapping[str, object],
+        observed_at: datetime,
+        expires_at: datetime | None = None,
+    ) -> Mapping[str, object]: ...
+
+    def status(self, *, event_id: str) -> str | None: ...
+
+
+class AlertSourceServices(Protocol):
+    def bind(self, source_id: str) -> BoundAlertSource: ...
+
+
+class BoundContextSource(Protocol):
+    """``eventmail.context_source.v1``：上报只读上下文材料。
+
+    这是告警正文进入 Wake 提示词的唯一通道：``active_context`` 会把 payload
+    原样渲染进 ``context_events``。
+    """
+
+    def report(
+        self,
+        *,
+        event_id: str,
+        payload: Mapping[str, object],
+        observed_at: datetime,
+        expires_at: datetime | None = None,
+    ) -> Mapping[str, object]: ...
+
+
+class ContextSourceServices(Protocol):
+    def bind(self, source_id: str) -> BoundContextSource: ...
+
+
 class PluginContext(Protocol):
     """本插件使用的 Context 窄面：ServiceKey 读取与生命周期监听。"""
 
@@ -248,6 +288,12 @@ INSTALLED_ASSETS = ServiceKey[InstalledAssets](INSTALLED_ASSETS_SERVICE_NAME)
 CREDENTIALS = ServiceKey[CredentialClients](CREDENTIALS_SERVICE_NAME)
 TIMERS = ServiceKey[PluginTimers](TIMERS_SERVICE_NAME)
 
+# eventmail 是第一方插件提供的告警/上下文邮箱；外部插件通过它的公开 key 接入。
+ALERT_SOURCE = ServiceKey[AlertSourceServices]("eventmail.alert_source.v1")
+CONTEXT_SOURCE = ServiceKey[ContextSourceServices](
+    "eventmail.context_source.v1"
+)
+
 
 def tool_name_error(name: object) -> str | None:
     """返回工具名不合法的原因，合法时返回 ``None``。"""
@@ -260,6 +306,8 @@ def tool_name_error(name: object) -> str | None:
 
 
 __all__ = [
+    "ALERT_SOURCE",
+    "CONTEXT_SOURCE",
     "CREDENTIALS",
     "CREDENTIALS_SERVICE_NAME",
     "INSTALLED_ASSETS",
@@ -268,11 +316,15 @@ __all__ = [
     "TIMERS_SERVICE_NAME",
     "TOOLS",
     "TOOLS_SERVICE_NAME",
+    "AlertSourceServices",
+    "BoundAlertSource",
+    "BoundContextSource",
     "BoundTool",
     "CallSource",
     "Capture",
     "ContentPart",
     "Context",
+    "ContextSourceServices",
     "CredentialClients",
     "CredentialRef",
     "Effect",

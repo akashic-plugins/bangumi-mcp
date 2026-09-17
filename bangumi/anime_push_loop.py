@@ -9,6 +9,7 @@ V3 目前没有外部插件可用的公开主动信息源能力，所以本模�
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
@@ -31,6 +32,8 @@ class AnimeUpdateLoop:
 
     coordinator: AnimeUpdateCoordinator
     timers: PluginTimersPort | None = None
+    # 每轮 due 之后把本地 pending 事件同步进告警邮箱；没有桥时为空。
+    alert_sync: Callable[[], object] | None = field(default=None, repr=False)
     _task: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
     _handle: TimerHandle | None = field(default=None, init=False, repr=False)
     _closed: bool = field(default=False, init=False, repr=False)
@@ -70,6 +73,8 @@ class AnimeUpdateLoop:
                 continue
             delay = await self.coordinator.run_step(kind)
             deadlines[kind] = loop.time() + delay
+            if kind == "due" and self.alert_sync is not None:
+                await asyncio.to_thread(self.alert_sync)
 
     async def _wait(self, delay: float) -> None:
         if self.timers is None:

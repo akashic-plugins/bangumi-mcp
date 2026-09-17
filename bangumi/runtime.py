@@ -15,7 +15,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Protocol, TypeVar
 
-from ._host_contract import CredentialRef, ToolResult
+from ._host_contract import (
+    ALERT_SOURCE,
+    CONTEXT_SOURCE,
+    CredentialRef,
+    PluginContext,
+    ToolResult,
+)
+from .alert_source import AlertBinding, BangumiAlertBridge
 from .anime_push_loop import AnimeUpdateLoop, PluginTimersPort
 from .confirmation import ConfirmationStore
 from .query import CollectionQuerySessionStore, QueryConfirmationStore
@@ -67,6 +74,7 @@ class BangumiRuntime:
     _lease: object | None = field(default=None, init=False, repr=False)
     _background_lease: object | None = field(default=None, init=False, repr=False)
     _loop: AnimeUpdateLoop | None = field(default=None, init=False, repr=False)
+    _bridge: BangumiAlertBridge | None = field(default=None, init=False, repr=False)
 
     # ---- 发现合同 ----
 
@@ -214,6 +222,7 @@ class BangumiRuntime:
             self._loop = AnimeUpdateLoop(
                 coordinator=self._coordinator(),
                 timers=self.timers,
+                alert_sync=self.sync_pending_alerts,
             )
         return self._loop
 
@@ -256,6 +265,27 @@ class BangumiRuntime:
             ),
             self.settings.anime_push,
         )
+
+    # ---- 告警投递桥（依赖第一方 eventmail）----
+
+    def deploy_alert_bridge(self, child: PluginContext) -> BangumiAlertBridge:
+        """在 eventmail 可用的子 Fiber 上登记告警与上下文来源。"""
+
+        self._bridge = BangumiAlertBridge(
+            store=self._anime_store(),
+            binding=AlertBinding(
+                alerts=child.require(ALERT_SOURCE).bind("bangumi"),
+                contexts=child.require(CONTEXT_SOURCE).bind("bangumi"),
+            ),
+        )
+        return self._bridge
+
+    def sync_pending_alerts(self) -> dict[str, int]:
+        """把本地 pending 事件同步进告警邮箱；没有桥时是空操作。"""
+
+        if self._bridge is None:
+            return {"reported": 0, "acknowledged": 0}
+        return self._bridge.tick(datetime.now(timezone.utc))
 
     # ---- 工具入口 ----
 

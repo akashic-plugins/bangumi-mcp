@@ -1,30 +1,45 @@
 # 追更放送提醒（主动推送）设计
 
-- 状态：**部分由 V3 支持**（修订 6）。抓取、映射、去重与本地事件库已迁移；**自动投递暂停**，原因见下。
+- 状态：**已由 V3 支持**（修订 7）。抓取与投递均已迁移；投递经 `eventmail` 告警邮箱交由 `wake` 插件完成。
 - 目标版本：`0.6.0`
-- 日期：2026-08-16（V3 边界修订）
-- 依据：[Bangumi 官方 API](https://bangumi.github.io/api/)、[AniList API](https://docs.anilist.co/)、Akashic `create-proactive-source` skill、`proactive_v2` 实现
+- 日期：2026-09-16（V3 投递修订）
+- 依据：[Bangumi 官方 API](https://bangumi.github.io/api/)、[AniList API](https://docs.anilist.co/)、Akashic `eventmail` 告警/上下文邮箱与 `wake` 插件
 
-> **V3 迁移边界（2026-09-16）**
+> **V3 投递实现（2026-09-16）**
 >
-> 上游 V3 当前没有外部插件可用的公开主动信息源能力：`PROACTIVE_COMPONENTS` /
-> `ProactiveSourceDefinition` / `BACKGROUND_JOBS` 只存在于设计文档，代码里零命中，
-> 仓库还有边界测试断言它们是 phantom。因此本文中依赖
-> `fetch_tool` / `ack_tool` / `channels=("alert",)` 与 MCP lifespan 的投递设计
-> **暂不可实现**。
+> 早先版本认为上游没有可用的主动信息源能力；这个判断是错的。真正的扩展点不在
+> `agent/plugin_composition` 的导出里，而在第一方 `eventmail` 插件提供的公开服务：
 >
-> 迁移后的实际行为：
+> - `eventmail.alert_source.v1`：`bind(source_id).report(event_id, payload, observed_at, expires_at)`
+>   上报告警，`status(event_id)` 读投递终态（`pending` / `selected` / `delivered` /
+>   `skipped` / `expired`）；
+> - `eventmail.context_source.v1`：同签名上报只读上下文材料。
 >
-> - 抓取与映射照旧：`catalog` / `schedule` / `due` 三轮询由插件在
->   `RUNTIME_STARTED` 用 `core.timers` 驱动，到期事件写入 `anime_updates.db`。
-> - 到期事件不再自动投递。`get_anime_update_alerts` / `acknowledge_anime_update_alerts`
->   保留为手动工具，供用户查看与清理。
-> - 领域接缝已按未来接线的形状拆好：`AnimeUpdateCoordinator.run_step(kind)` /
->   `next_poll_delay(kind)` 与运行时的 `fetch_pending_alerts` /
->   `acknowledge_anime_update_alerts`。上游发布公开 proactive source 能力后，
->   只需替换投递适配层，不动领域逻辑。
+> **为什么必须两个通道都用**：`wake` 的 alert 阶段只把
+> `Request.alert_ref`（`source_id` / `event_id` / `mail_id` 三个标识）放进上下文，
+> 告警 payload 本身**不渲染**；模型能看到的是
+> `active_context()` 返回的 `context_events`，其 payload 原样进提示词。
+> 只报 Alert 会让模型看不到标题与放送时间，只能写空泛提醒。
 >
-> 下文的领域事实（AniList 精度边界、章节映射、去重、SQLite 状态）仍然有效。
+> 因此本插件对同一个 `event_id` **同时**上报：`Context` 承载事实（供模型写正文），
+> `Alert` 只当“到点了”的触发器。
+>
+> ```text
+> Bangumi 刷新循环（catalog / schedule / due）
+>   ├─ report_context(payload=标题/集数/放送时刻/来源, expires_at=now+24h)
+>   └─ report_alert(event_id 同上)
+>         └─► wake owner="alert" ──► share_alert(message) ──► delivery ──► 用户
+> ```
+>
+> 本地 `anime_updates.db` 仍是插件自己的真相源；邮箱只负责投递。`wake` 的
+> `Alert.status` 进入终态后，插件把对应事件从本地 pending 队列确认掉。
+>
+> **部署前提**：`wake` 的 `delivery` 必须配置（channel / recipient / session），
+> 否则 `capture()` 对 `owner="alert"` 直接返回 `None`，告警只会留在邮箱里。
+> `eventmail` 缺席时插件自动降级为纯本地抓取 + 手动工具。
+>
+> 下文中依赖旧 `proactive_v2` / MCP lifespan 的投递描述已被本节取代；
+> 领域事实（AniList 精度边界、章节映射、去重、SQLite 状态）仍然有效。
 
 ## 1. 问题和用户意图
 

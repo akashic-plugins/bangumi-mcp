@@ -158,8 +158,27 @@ V3 里有两条路，**推荐方案 A**：
 - Phase 0：**已完成**（`plugin.py` V3 骨架、`bangumi/` 包、工具目录与 11 个工具发现合同、契约与 `apply` 接线测试、CI 改为 `plugin-v3`）。
 - Phase 1：**已完成**（`configure.py`、固定输入契约、凭据引用、旧 TOML 转换、配置文档）。
 - Phase 2：**已完成**（9 个查询/写入工具接入领域服务、2 个放送事件工具接入本地事件库；`BangumiRuntime` 在每次调用内开凭据租约并把同步 HTTP/SQLite 放到线程；旧 TOML 运行时加载器 `bangumi/config.py` 与 `tests/test_config.py` 已删除）。
-- Phase 3：**已完成**（后台刷新循环搬到 `RUNTIME_STARTED` / `RUNTIME_STOPPING`，用 `core.timers` 做一次性等待；`enabled + AniList Token` 才启动，candidate 期零调度；无自动投递、无自动 ACK）。为将来接上游 proactive source 预留的接缝是公开的 `run_step(kind)` / `next_poll_delay(kind)` 与运行时的 `fetch_pending_alerts` / `acknowledge_anime_update_alerts`。
-- Phase 4：**已完成**（`anime-update-push.md` 状态修订为「部分由 V3 支持」并说明投递暂停；README 已完成安装/配置/升级与提醒边界；契约测试补齐宿主的 AST 身份读取规则）。
+- Phase 3：**已完成**（后台刷新循环搬到 `RUNTIME_STARTED` / `RUNTIME_STOPPING`，用 `core.timers` 做一次性等待；`enabled + AniList Token` 才启动，candidate 期零调度）。
+- Phase 4：**已完成**（文档与契约收尾）。
+- Phase 5：**已完成**（放送提醒投递）。
+
+### Phase 5 — 放送提醒投递（已完成）
+
+早先结论「上游没有公开主动信息源能力」是错的：扩展点在第一方 `eventmail` 插件，
+不在 `agent/plugin_composition` 的导出里。
+
+- `eventmail.alert_source.v1` 提供 `bind(source_id).report(...)` / `status(...)`；
+  `wake` 以 `owner="alert"` 流程消费并投递用户可见消息。
+- 关键约束（已核实）：`wake` 的 alert 阶段只把 `Request.alert_ref`（三个标识）
+  放进上下文，**payload 不渲染**；模型能看到的是 `active_context()` 返回的
+  `context_events`，其 payload 原样进提示词。
+- 因此 `bangumi/alert_source.py` 对同一个 `event_id` **同时**上报
+  `Context`（承载标题/集数/放送时刻）与 `Alert`（只当触发器）。
+- 投递桥挂在 `ctx.inject((ALERT_SOURCE, CONTEXT_SOURCE), ...)` 的**可选子 Fiber** 上：
+  `eventmail` 缺席时自动降级为本地抓取 + 手动工具。
+- `AnimeUpdateLoop` 的 `due` 轮询后调用 `runtime.sync_pending_alerts()`；
+  `Alert.status` 进入 `delivered` / `skipped` / `expired` 后把事件从本地 pending 确认掉。
+- 部署前提：`wake` 必须配置 `delivery`（channel / recipient / session），否则告警只留在邮箱里。
 
 ### Phase 2 运行期约定
 

@@ -15,6 +15,8 @@ from pathlib import Path
 from agent.plugin_composition import RUNTIME_STARTED, RUNTIME_STOPPING
 
 from bangumi._host_contract import (
+    ALERT_SOURCE,
+    CONTEXT_SOURCE,
     CREDENTIALS,
     INSTALLED_ASSETS,
     TIMERS,
@@ -50,6 +52,27 @@ async def apply(ctx: PluginContext) -> None:
     await ctx.require(INSTALLED_ASSETS).register(ctx, "skills", "skills")
     await _register_tool_catalog(ctx, runtime.catalog())
     await _register_refresh_lifecycle(ctx, runtime)
+    await _register_alert_bridge(ctx, runtime)
+
+
+async def _register_alert_bridge(
+    ctx: PluginContext,
+    runtime: BangumiRuntime,
+) -> None:
+    """eventmail 可用时登记告警桥；缺失时只保留本地抓取与手动工具。
+
+    与刷新循环不同，这里不按 ``anime_push.enabled`` 提前返回：已有 pending
+    事件仍应能被投递，桥本身不产生外部工作。
+    """
+
+    async def apply_alert_bridge(child: PluginContext) -> None:
+        _ = runtime.deploy_alert_bridge(child)
+
+    _ = await ctx.inject(
+        (ALERT_SOURCE, CONTEXT_SOURCE),
+        apply_alert_bridge,
+        name="bangumi-alert-bridge",
+    )
 
 
 async def _register_refresh_lifecycle(

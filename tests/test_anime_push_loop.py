@@ -76,6 +76,47 @@ class _FakeCoordinator:
         return 60.0
 
 
+def test_loop_runs_alert_sync_after_each_due_step() -> None:
+    coordinator = _FakeCoordinator({"catalog": 3600.0, "schedule": 3600.0, "due": 0.0})
+    syncs: list[int] = []
+    loop = AnimeUpdateLoop(
+        coordinator=coordinator,  # type: ignore[arg-type]
+        timers=_BlockingTimers(),  # type: ignore[arg-type]
+        alert_sync=lambda: syncs.append(1),
+    )
+
+    async def exercise() -> None:
+        await loop.start()
+        for _ in range(50):
+            await asyncio.sleep(0)
+            if syncs:
+                break
+        await loop.stop()
+
+    asyncio.run(exercise())
+
+    assert coordinator.calls == ["due"]
+    assert syncs, "due 轮询后必须同步一次告警邮箱"
+
+
+def test_loop_skips_alert_sync_without_bridge() -> None:
+    coordinator = _FakeCoordinator({"catalog": 3600.0, "schedule": 3600.0, "due": 0.0})
+    loop = AnimeUpdateLoop(
+        coordinator=coordinator,  # type: ignore[arg-type]
+        timers=_BlockingTimers(),  # type: ignore[arg-type]
+    )
+
+    async def exercise() -> None:
+        await loop.start()
+        for _ in range(30):
+            await asyncio.sleep(0)
+        await loop.stop()
+
+    asyncio.run(exercise())
+
+    assert coordinator.calls == ["due"]
+
+
 def test_loop_runs_steps_and_schedules_timer_waits() -> None:
     coordinator = _FakeCoordinator({"catalog": 0.0, "schedule": 3600.0, "due": 0.0})
     timers = _BlockingTimers()
@@ -191,6 +232,8 @@ def test_apply_registers_refresh_lifecycle_only_when_enabled(
     disabled, _ = _run_apply(tmp_path, monkeypatch, config=_CONFIG)
 
     assert disabled.listeners == []
+    # 桥在两边都注册：已有 pending 事件仍应能被投递。
+    assert [name for _, _, name in disabled.optional] == ["bangumi-alert-bridge"]
 
     enabled, _ = _run_apply(
         tmp_path,
@@ -207,6 +250,14 @@ def test_apply_registers_refresh_lifecycle_only_when_enabled(
 
     names = [getattr(key, "name", "") for key, _ in enabled.listeners]
     assert names == ["runtime.started", "runtime.stopping"]
+
+    # 告警桥是可选依赖：eventmail 缺席时降级为纯本地抓取。
+    assert [name for _, _, name in enabled.optional] == ["bangumi-alert-bridge"]
+    dependencies, _, _ = enabled.optional[0]
+    assert [getattr(key, "name", "") for key in dependencies] == [
+        "eventmail.alert_source.v1",
+        "eventmail.context_source.v1",
+    ]
 
 
 def test_lifecycle_start_and_stop_open_and_close_background_lease(

@@ -171,6 +171,9 @@ class _FakeContext:
     data_root: Path
     services: dict[object, object] = field(default_factory=dict)
     listeners: list[tuple[object, object]] = field(default_factory=list)
+    optional: list[tuple[tuple[object, ...], object, str]] = field(
+        default_factory=list
+    )
 
     def require(self, key: object) -> object:
         try:
@@ -180,6 +183,16 @@ class _FakeContext:
 
     async def on(self, key: object, listener: object) -> object:
         self.listeners.append((key, listener))
+        return object()
+
+    async def inject(
+        self,
+        dependencies: tuple[object, ...],
+        apply: object,
+        *,
+        name: str | None = None,
+    ) -> object:
+        self.optional.append((dependencies, apply, name or ""))
         return object()
 
 

@@ -53,8 +53,9 @@ description: 分页查询用户的 Bangumi 收藏列表、单个条目状态和�
 - 只能说该集“计划放送”，不能说某个流媒体、字幕组或下载源已经上线。
 - 提醒可能因 Akashic proactive tick、会话繁忙或外部 channel 状态延后，不要把实际送达时间解释为计划时间发生变化。
 - 标题和正文中的绝对时间及其时区是权威展示，不要改写为“刚刚”“N 分钟后”等相对时间。
-- `get_anime_update_alerts` 只读返回本地已到期的放送事件；`acknowledge_anime_update_alerts` 只在用户明确要求清理这些事件时调用。当前版本不会自动把这些事件发成提醒，模型不要声称已经主动通知过用户。
-- 用户想停止抓取提醒时，说明应在 Akashic `main.py setup` 里把 `anime_push.enabled` 设为关闭；不要删除或重建提醒数据库。
+- 提醒由 Akashic 的 `wake` 投递链路在到期后自动发出，不经过本轮对话。不要把“插件已记录事件”说成“已经提醒过用户”：投递是否成功取决于 `wake` 是否配置了投递目标，模型无法从这里确认。
+- `get_anime_update_alerts` 只读返回本地已到期的放送事件；`acknowledge_anime_update_alerts` 只在用户明确要求清理这些事件时调用。不要为了查询、重放或修改提醒而调用它们。
+- 用户想停止提醒时，说明应在 Akashic `main.py setup` 里把 `anime_push.enabled` 设为关闭；不要删除或重建提醒数据库。
 
 ## 凭据
 
