@@ -75,6 +75,37 @@ def test_plugin_declares_v3_identity_literals() -> None:
     assert values["version"] == "0.6.0"
 
 
+def test_plugin_identity_matches_host_ast_loader_rules() -> None:
+    """复刻宿主 loader 的身份读取规则：三个顶层单次字面量，且 API 必须为 3。"""
+
+    fields = {"name", "version", "api_version"}
+    values: dict[str, object] = {}
+    for statement in _plugin_tree().body:
+        if isinstance(statement, ast.Assign):
+            targets = statement.targets
+            value = statement.value
+        elif isinstance(statement, ast.AnnAssign) and statement.value is not None:
+            targets = [statement.target]
+            value = statement.value
+        else:
+            continue
+        names = [
+            target.id
+            for target in targets
+            if isinstance(target, ast.Name) and target.id in fields
+        ]
+        if not names:
+            continue
+        assert len(targets) == 1 and len(names) == 1, "身份必须是单次直接赋值"
+        assert isinstance(value, ast.Constant), "身份必须是字面量"
+        assert names[0] not in values, f"身份重复赋值: {names[0]}"
+        values[names[0]] = value.value
+
+    assert sorted(values) == sorted(fields), "身份字段必须齐全"
+    assert type(values["api_version"]) is int
+    assert values["api_version"] == 3
+
+
 def test_plugin_apply_accepts_exactly_one_positional_argument() -> None:
     function = _apply_function(_plugin_tree())
 

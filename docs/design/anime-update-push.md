@@ -1,9 +1,30 @@
 # 追更放送提醒（主动推送）设计
 
-- 状态：Implemented（修订 5）
-- 目标版本：`0.5.0`
-- 日期：2026-08-08
+- 状态：**部分由 V3 支持**（修订 6）。抓取、映射、去重与本地事件库已迁移；**自动投递暂停**，原因见下。
+- 目标版本：`0.6.0`
+- 日期：2026-08-16（V3 边界修订）
 - 依据：[Bangumi 官方 API](https://bangumi.github.io/api/)、[AniList API](https://docs.anilist.co/)、Akashic `create-proactive-source` skill、`proactive_v2` 实现
+
+> **V3 迁移边界（2026-09-16）**
+>
+> 上游 V3 当前没有外部插件可用的公开主动信息源能力：`PROACTIVE_COMPONENTS` /
+> `ProactiveSourceDefinition` / `BACKGROUND_JOBS` 只存在于设计文档，代码里零命中，
+> 仓库还有边界测试断言它们是 phantom。因此本文中依赖
+> `fetch_tool` / `ack_tool` / `channels=("alert",)` 与 MCP lifespan 的投递设计
+> **暂不可实现**。
+>
+> 迁移后的实际行为：
+>
+> - 抓取与映射照旧：`catalog` / `schedule` / `due` 三轮询由插件在
+>   `RUNTIME_STARTED` 用 `core.timers` 驱动，到期事件写入 `anime_updates.db`。
+> - 到期事件不再自动投递。`get_anime_update_alerts` / `acknowledge_anime_update_alerts`
+>   保留为手动工具，供用户查看与清理。
+> - 领域接缝已按未来接线的形状拆好：`AnimeUpdateCoordinator.run_step(kind)` /
+>   `next_poll_delay(kind)` 与运行时的 `fetch_pending_alerts` /
+>   `acknowledge_anime_update_alerts`。上游发布公开 proactive source 能力后，
+>   只需替换投递适配层，不动领域逻辑。
+>
+> 下文的领域事实（AniList 精度边界、章节映射、去重、SQLite 状态）仍然有效。
 
 ## 1. 问题和用户意图
 
