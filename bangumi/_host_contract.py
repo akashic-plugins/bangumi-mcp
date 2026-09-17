@@ -16,6 +16,7 @@ import re
 from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Generic, Literal, Protocol, TypeVar
 
 try:  # 宿主运行时提供。
@@ -56,6 +57,7 @@ except ModuleNotFoundError:  # pragma: no cover - 只在没有宿主 SDK 的离�
 TOOLS_SERVICE_NAME = "tools.v1"
 INSTALLED_ASSETS_SERVICE_NAME = "core.installed_assets.v1"
 CREDENTIALS_SERVICE_NAME = "core.credentials"
+TIMERS_SERVICE_NAME = "core.timers"
 
 _TOOL_NAME = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
@@ -211,9 +213,40 @@ class CredentialClients(Protocol):
     ) -> AbstractAsyncContextManager[ProviderClient]: ...
 
 
+class TimerHandle(Protocol):
+    """一次一次性定时等待。"""
+
+    async def result(self) -> object: ...
+
+    async def cancel(self) -> object: ...
+
+    async def cleanup(self) -> None: ...
+
+
+class PluginTimers(Protocol):
+    """``core.timers`` 的一次性定时入口；candidate 期登记会失败。"""
+
+    def schedule(self, deadline: datetime) -> TimerHandle: ...
+
+
+class PluginContext(Protocol):
+    """本插件使用的 Context 窄面：ServiceKey 读取与生命周期监听。"""
+
+    @property
+    def config(self) -> Mapping[str, object]: ...
+
+    @property
+    def data_root(self) -> object: ...
+
+    def require(self, key: object) -> object: ...
+
+    async def on(self, key: object, listener: object) -> Effect: ...
+
+
 TOOLS = ServiceKey[ToolCatalogService](TOOLS_SERVICE_NAME)
 INSTALLED_ASSETS = ServiceKey[InstalledAssets](INSTALLED_ASSETS_SERVICE_NAME)
 CREDENTIALS = ServiceKey[CredentialClients](CREDENTIALS_SERVICE_NAME)
+TIMERS = ServiceKey[PluginTimers](TIMERS_SERVICE_NAME)
 
 
 def tool_name_error(name: object) -> str | None:
@@ -231,6 +264,8 @@ __all__ = [
     "CREDENTIALS_SERVICE_NAME",
     "INSTALLED_ASSETS",
     "INSTALLED_ASSETS_SERVICE_NAME",
+    "TIMERS",
+    "TIMERS_SERVICE_NAME",
     "TOOLS",
     "TOOLS_SERVICE_NAME",
     "BoundTool",
@@ -244,8 +279,11 @@ __all__ = [
     "InstalledAsset",
     "InstalledAssets",
     "OpenTool",
+    "PluginContext",
+    "PluginTimers",
     "ProviderClient",
     "ServiceKey",
+    "TimerHandle",
     "ToolCatalogService",
     "ToolRef",
     "ToolResult",

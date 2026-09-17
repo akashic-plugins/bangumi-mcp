@@ -12,16 +12,19 @@ from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from agent.plugin_composition import RUNTIME_STARTED, RUNTIME_STOPPING
+
 from bangumi._host_contract import (
     CREDENTIALS,
     INSTALLED_ASSETS,
+    TIMERS,
     TOOLS,
     BoundTool,
     CallSource,
-    Context,
+    PluginContext,
     ToolResult,
 )
-from bangumi.runtime import build_runtime
+from bangumi.runtime import BangumiRuntime, build_runtime
 from bangumi.settings import parse_settings
 from bangumi.tools import ToolCatalog, ToolEntry
 
@@ -30,24 +33,47 @@ name = "bangumi"
 version = "0.6.0"
 desc = "查询 Bangumi 收藏与观看进度；写入需逐字确认"
 
-inject = (TOOLS, INSTALLED_ASSETS, CREDENTIALS)
+inject = (TOOLS, INSTALLED_ASSETS, CREDENTIALS, TIMERS)
 
 
-async def apply(ctx: Context) -> None:
-    """解析固定配置，注册 Skill 资产与工具目录。"""
+async def apply(ctx: PluginContext) -> None:
+    """解析固定配置，注册 Skill 资产、工具目录与放送刷新循环。"""
 
     settings = parse_settings(ctx.config)
     runtime = build_runtime(
         settings=settings,
         data_dir=Path(ctx.data_root),
         credentials=ctx.require(CREDENTIALS),
+        timers=ctx.require(TIMERS),
         ctx=ctx,
     )
     await ctx.require(INSTALLED_ASSETS).register(ctx, "skills", "skills")
     await _register_tool_catalog(ctx, runtime.catalog())
+    await _register_refresh_lifecycle(ctx, runtime)
 
 
-async def _register_tool_catalog(ctx: Context, catalog: ToolCatalog) -> None:
+async def _register_refresh_lifecycle(
+    ctx: PluginContext,
+    runtime: BangumiRuntime,
+) -> None:
+    """只在正式运行期启动后台刷新；candidate 校验期零调度。"""
+
+    if not runtime.background_refresh_enabled:
+        return
+    _ = await ctx.on(
+        RUNTIME_STARTED,
+        lambda _event: runtime.start_background_refresh(),
+    )
+    _ = await ctx.on(
+        RUNTIME_STOPPING,
+        lambda _event: runtime.stop_background_refresh(),
+    )
+
+
+async def _register_tool_catalog(
+    ctx: PluginContext,
+    catalog: ToolCatalog,
+) -> None:
     """把一个目录注册成宿主工具；每个条目固定自己的发现合同。"""
 
     tools = ctx.require(TOOLS)

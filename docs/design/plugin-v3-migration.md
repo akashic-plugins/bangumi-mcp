@@ -158,7 +158,8 @@ V3 里有两条路，**推荐方案 A**：
 - Phase 0：**已完成**（`plugin.py` V3 骨架、`bangumi/` 包、工具目录与 11 个工具发现合同、契约与 `apply` 接线测试、CI 改为 `plugin-v3`）。
 - Phase 1：**已完成**（`configure.py`、固定输入契约、凭据引用、旧 TOML 转换、配置文档）。
 - Phase 2：**已完成**（9 个查询/写入工具接入领域服务、2 个放送事件工具接入本地事件库；`BangumiRuntime` 在每次调用内开凭据租约并把同步 HTTP/SQLite 放到线程；旧 TOML 运行时加载器 `bangumi/config.py` 与 `tests/test_config.py` 已删除）。
-- Phase 3–4：未开始（后台刷新循环、文档收尾）。
+- Phase 3：**已完成**（后台刷新循环搬到 `RUNTIME_STARTED` / `RUNTIME_STOPPING`，用 `core.timers` 做一次性等待；`enabled + AniList Token` 才启动，candidate 期零调度；无自动投递、无自动 ACK）。为将来接上游 proactive source 预留的接缝是公开的 `run_step(kind)` / `next_poll_delay(kind)` 与运行时的 `fetch_pending_alerts` / `acknowledge_anime_update_alerts`。
+- Phase 4：未开始（`anime-update-push.md` 状态修订、README 收尾、真实安装链静态检查）。
 
 ### Phase 2 运行期约定
 

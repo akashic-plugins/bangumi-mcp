@@ -1069,6 +1069,30 @@ class AnimeUpdateCoordinator:
             raise AnimeMappingError("AniList 自动映射没有唯一严格候选")
         return matches[0], "automatic"
 
+    def next_poll_delay(self, kind: str) -> float:
+        """返回 kind 距离下次轮询的秒数；没有记录时立即轮询。"""
+
+        current_epoch = int(_aware_utc(self._clock()).timestamp())
+        return max(0.0, self.store.poll_next_run_at(kind) - current_epoch)
+
+    async def run_step(self, kind: str) -> float:
+        """执行一次轮询并返回下次间隔；失败时返回退避时间。"""
+
+        methods = {
+            "catalog": self.refresh_catalog,
+            "schedule": self.refresh_schedules,
+            "due": self.evaluate_due,
+        }
+        intervals = {
+            "catalog": CATALOG_INTERVAL_SECONDS,
+            "schedule": SCHEDULE_INTERVAL_SECONDS,
+            "due": DUE_INTERVAL_SECONDS,
+        }
+        method = methods.get(kind)
+        if method is None:
+            raise ValueError(f"未知轮询类型: {kind}")
+        return await self._run_step(kind, method, intervals[kind])
+
     async def _run_step(
         self,
         kind: str,

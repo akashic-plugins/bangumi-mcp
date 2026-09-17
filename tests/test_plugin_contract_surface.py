@@ -139,7 +139,12 @@ def test_plugin_injects_required_service_keys() -> None:
         for element in inject.value.elts
         if isinstance(element, ast.Name)
     ]
-    assert names == ["TOOLS", "INSTALLED_ASSETS", "CREDENTIALS"]
+    assert names == [
+        "TOOLS",
+        "INSTALLED_ASSETS",
+        "CREDENTIALS",
+        "TIMERS",
+    ]
 
 
 def test_tool_catalog_lists_exactly_the_public_tools() -> None:

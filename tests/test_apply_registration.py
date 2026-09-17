@@ -13,6 +13,7 @@ import plugin
 from bangumi._host_contract import (
     CREDENTIALS,
     INSTALLED_ASSETS,
+    TIMERS,
     TOOLS,
     CredentialRef,
 )
@@ -140,17 +141,46 @@ class _CredentialServiceRecorder:
         return manager()
 
 
+class _FakeTimerHandle:
+    def __init__(self) -> None:
+        self.cancelled = False
+
+    async def result(self) -> object:
+        raise RuntimeError("测试不会等待真实定时器")
+
+    async def cancel(self) -> object:
+        self.cancelled = True
+        return object()
+
+    async def cleanup(self) -> None:
+        self.cancelled = True
+
+
+class _FakeTimers:
+    def __init__(self) -> None:
+        self.deadlines: list[object] = []
+
+    def schedule(self, deadline: object) -> _FakeTimerHandle:
+        self.deadlines.append(deadline)
+        return _FakeTimerHandle()
+
+
 @dataclass
 class _FakeContext:
     config: Mapping[str, object]
     data_root: Path
     services: dict[object, object] = field(default_factory=dict)
+    listeners: list[tuple[object, object]] = field(default_factory=list)
 
     def require(self, key: object) -> object:
         try:
             return self.services[key]
         except KeyError as error:
             raise AssertionError(f"apply 请求了未提供的 service: {key!r}") from error
+
+    async def on(self, key: object, listener: object) -> object:
+        self.listeners.append((key, listener))
+        return object()
 
 
 _CONFIG = {
@@ -207,6 +237,7 @@ def _run_apply(
             TOOLS: tools,
             INSTALLED_ASSETS: assets,
             CREDENTIALS: credentials,
+            TIMERS: _FakeTimers(),
         },
     )
     monkeypatch.setattr(
