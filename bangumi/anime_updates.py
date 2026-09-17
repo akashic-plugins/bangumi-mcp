@@ -22,7 +22,6 @@ from .anilist import AniListApiError, AniListNotFoundError
 from .client import BangumiApiError
 from .config import AnimePushRuntimeConfig
 
-
 logger = logging.getLogger(__name__)
 SCHEMA_VERSION = "1"
 CATALOG_INTERVAL_SECONDS = 6 * 60 * 60

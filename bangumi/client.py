@@ -10,7 +10,6 @@ import requests
 
 from .config import BangumiRuntimeConfig
 
-
 API_BASE_URL = "https://api.bgm.tv"
 REQUEST_TIMEOUT = (3.05, 15.0)
 

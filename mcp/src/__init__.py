@@ -1,1 +1,0 @@
-"""Bangumi MCP implementation."""

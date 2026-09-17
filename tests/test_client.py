@@ -4,8 +4,8 @@ from typing import Any
 
 import pytest
 
-from src.client import API_BASE_URL, BangumiApiError, BangumiClient
-from src.config import BangumiRuntimeConfig
+from bangumi.client import API_BASE_URL, BangumiApiError, BangumiClient
+from bangumi.config import BangumiRuntimeConfig
 
 
 class FakeResponse:

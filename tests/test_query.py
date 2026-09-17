@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.query import (
+from bangumi.query import (
     CollectionQuerySessionStore,
     PreparedCollectionQuery,
     QueryConfirmationStore,

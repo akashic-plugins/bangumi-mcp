@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Mapping
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import tomllib
 
 DEFAULT_USER_AGENT = (
     "akashic-plugins/bangumi-mcp/0.5.0 "

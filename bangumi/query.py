@@ -3,9 +3,9 @@ from __future__ import annotations
 import secrets
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, Literal
-
+from typing import Literal
 
 CollectionQueryOperation = Literal["list_all", "filter", "analyze", "continue"]
 CollectionQueryRequestOperation = Literal["list_all", "filter", "analyze"]

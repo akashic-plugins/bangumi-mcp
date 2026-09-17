@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.config import BangumiConfigError, load_runtime_config
+from bangumi.config import BangumiConfigError, load_runtime_config
 
 
 def test_runtime_config_keeps_token_out_of_repr(tmp_path) -> None:

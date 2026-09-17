@@ -8,17 +8,16 @@ from typing import Any
 
 import pytest
 
-from src.anilist import AniListNotFoundError
-from src.anime_updates import (
+from bangumi.anilist import AniListNotFoundError
+from bangumi.anime_updates import (
     AnimeUpdateCoordinator,
     AnimeUpdateStateError,
     AnimeUpdateStore,
     CatalogEpisode,
     CatalogSubject,
 )
-from src.client import BangumiApiError
-from src.config import AnimePushRuntimeConfig
-
+from bangumi.client import BangumiApiError
+from bangumi.config import AnimePushRuntimeConfig
 
 NOW = datetime(2026, 8, 5, 12, 0, tzinfo=timezone.utc)
 

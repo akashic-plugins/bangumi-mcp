@@ -1,107 +1,97 @@
+"""Bangumi 插件 V3 入口。
+
+底座只读取本文件顶层的 ``name`` / ``version`` / ``api_version`` 三个字面量，
+再调用唯一入口 ``apply(ctx)``。配置、凭据、工具与 Skill 的注册全部在
+``apply`` 内通过宿主 ServiceKey 完成；本模块不导出任何 V2 类式插件协议，
+也没有模块级配置导出。
+"""
+
 from __future__ import annotations
 
-from collections.abc import Mapping
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
-
-from agent.plugins import McpServerSpec, Plugin, ProactiveSourceSpec
-
-
-DEFAULT_USER_AGENT = (
-    "akashic-plugins/bangumi-mcp/0.5.0 "
-    "(https://github.com/akashic-plugins/bangumi-mcp)"
+from bangumi._host_contract import (
+    INSTALLED_ASSETS,
+    TOOLS,
+    BoundTool,
+    CallSource,
+    Context,
+    ToolResult,
 )
+from bangumi.tools import TOOL_CATALOG, ToolCatalog, ToolEntry, ToolExecutionError
+
+api_version = 3
+name = "bangumi"
+version = "0.6.0"
+desc = "查询 Bangumi 收藏与观看进度；写入需逐字确认"
+
+inject = (TOOLS, INSTALLED_ASSETS)
 
 
-class AnimePushConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+async def apply(ctx: Context) -> None:
+    """注册本插件的 Skill 资产与工具目录。"""
 
-    enabled: bool = Field(default=False, strict=True)
-    notify_before_minutes: int = Field(default=0, ge=0, le=1440, strict=True)
-    display_timezone: str = "Asia/Shanghai"
-    anilist_token: SecretStr | None = None
-    media_id_overrides: dict[int, int] = Field(default_factory=dict)
-
-    @field_validator("display_timezone")
-    @classmethod
-    def validate_timezone(cls, value: str) -> str:
-        clean = value.strip()
-        if not clean:
-            raise ValueError("display_timezone 必须是非空时区名称")
-        try:
-            ZoneInfo(clean)
-        except ZoneInfoNotFoundError as error:
-            raise ValueError("display_timezone 不是有效 IANA 时区") from error
-        return clean
-
-    @field_validator("media_id_overrides", mode="before")
-    @classmethod
-    def validate_overrides(cls, value: object) -> dict[int, int]:
-        if value is None:
-            return {}
-        if not isinstance(value, Mapping):
-            raise ValueError("media_id_overrides 必须是映射")
-        result: dict[int, int] = {}
-        for raw_subject_id, raw_media_id in value.items():
-            if isinstance(raw_subject_id, bool) or isinstance(raw_media_id, bool):
-                raise ValueError("media_id_overrides 的 ID 必须是正整数")
-            try:
-                subject_id = int(raw_subject_id)
-            except (TypeError, ValueError) as error:
-                raise ValueError(
-                    "media_id_overrides 的 subject ID 必须是正整数"
-                ) from error
-            if (
-                subject_id <= 0
-                or not isinstance(raw_media_id, int)
-                or raw_media_id <= 0
-            ):
-                raise ValueError("media_id_overrides 的 ID 必须是正整数")
-            result[subject_id] = raw_media_id
-        return result
+    await ctx.require(INSTALLED_ASSETS).register(ctx, "skills", "skills")
+    await _register_tool_catalog(ctx, TOOL_CATALOG)
 
 
-class BangumiConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+async def _register_tool_catalog(ctx: Context, catalog: ToolCatalog) -> None:
+    """把一个静态目录注册成宿主工具；每个条目固定自己的发现合同。"""
 
-    access_token: SecretStr | None = None
-    user_agent: str = Field(default=DEFAULT_USER_AGENT, min_length=1)
-    anime_push: AnimePushConfig = Field(default_factory=AnimePushConfig)
+    tools = ctx.require(TOOLS)
+    _ = await tools.declare_group(ctx, always_on=True, description=desc)
+    for entry in catalog.entries:
+        _ = await tools.register(
+            ctx,
+            name=entry.name,
+            description=entry.description,
+            parameters=entry.parameters,
+            open=_BoundBangumiTool(entry).open,
+            idempotent=entry.idempotent,
+            risk=entry.risk,
+        )
 
 
-class BangumiPlugin(Plugin):
-    api_version = 2
-    name = "bangumi"
-    version = "0.5.0"
-    desc = "查询 Bangumi 收藏与观看进度，并主动提醒在看动画的计划放送"
-    author = "lfegg"
-    ConfigModel = BangumiConfig
+class _BoundBangumiTool:
+    """一次工具 binding 的窄实现；领域实现推迟到 Phase 2 接入。
 
-    @classmethod
-    def skill_roots(cls) -> tuple[str, ...]:
-        return ("skills",)
+    Phase 0 只冻结发现合同：工具可被宿主列出并校验 schema，执行会明确失败，
+    不会静默返回伪造结果。
+    """
 
-    @classmethod
-    def mcp_servers(cls) -> list[McpServerSpec]:
-        return [
-            McpServerSpec(
-                name="bangumi",
-                command=("python", "mcp/run_mcp.py"),
-            )
-        ]
+    def __init__(self, entry: ToolEntry) -> None:
+        self._entry = entry
 
-    def proactive_sources(self) -> list[ProactiveSourceSpec]:
-        config = self.context.config
-        if not isinstance(config, BangumiConfig) or not config.anime_push.enabled:
-            return []
-        return [
-            ProactiveSourceSpec(
-                id="anime_updates",
-                channels=("alert",),
-                server="bangumi",
-                fetch_tool="get_anime_update_alerts",
-                ack_tool="acknowledge_anime_update_alerts",
-                fetch_page_size=50,
-            )
-        ]
+    @property
+    def idempotent(self) -> bool:
+        return self._entry.idempotent
+
+    @asynccontextmanager
+    async def open(
+        self,
+        state: Mapping[str, object],
+    ) -> AsyncIterator[BoundTool]:
+        del state
+        yield self
+
+    async def prepare(
+        self,
+        arguments: Mapping[str, object],
+        source: CallSource | None = None,
+    ) -> Mapping[str, object]:
+        del source
+        return arguments
+
+    async def invoke(self, key: str, arguments: Mapping[str, object]) -> ToolResult:
+        del key, arguments
+        raise ToolExecutionError(
+            f"工具 {self._entry.name} 的领域实现尚未接入（Phase 2）"
+        )
+
+    async def query(self, key: str) -> ToolResult | None:
+        del key
+        return None
+
+
+__all__ = ["api_version", "apply", "desc", "inject", "name", "version"]

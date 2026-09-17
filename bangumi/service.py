@@ -17,7 +17,6 @@ from .query import (
     QueryStateError,
 )
 
-
 SUBJECT_ANIME = 2
 EPISODE_WATCHED = 2
 COLLECTION_TYPES = {

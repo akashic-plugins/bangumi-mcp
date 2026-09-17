@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from src.anilist import (
+from bangumi.anilist import (
     ANILIST_API_URL,
     AniListApiError,
     AniListClient,

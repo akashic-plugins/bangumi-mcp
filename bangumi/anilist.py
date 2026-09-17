@@ -7,7 +7,6 @@ from typing import Any, Protocol
 
 import requests
 
-
 ANILIST_API_URL = "https://graphql.anilist.co"
 REQUEST_TIMEOUT = (3.05, 15.0)
 

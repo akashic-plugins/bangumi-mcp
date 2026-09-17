@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.confirmation import (
+from bangumi.confirmation import (
     ConfirmationError,
     ConfirmationStore,
     PreparedUpdate,
