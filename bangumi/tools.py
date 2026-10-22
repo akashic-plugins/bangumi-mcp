@@ -12,8 +12,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
-from ._host_contract import ContentPart, ToolResult, tool_name_error
+from plugins.ledger.contract import ContentPart
 
+from ._host_contract import Outcome, tool_name_error
+
+# 本仓库内部的只读/写入语义元数据，**不再传给宿主**：
+# 宿主的 ``ToolCatalog.register`` 已删除 ``risk`` 参数。
 Risk = Literal["read-only", "read-write", "external-side-effect"]
 
 SUBJECT_TYPE_ENUM = ["all", "book", "anime", "music", "game", "real"]
@@ -43,12 +47,14 @@ class ToolEntry:
     risk: Risk
     idempotent: bool
     execute: ToolExecutor
+    # 只读工具可被宿主重叠调度。默认 False：未知工具一律串行。
+    parallel: bool = False
 
 
 class ToolExecutor(Protocol):
     """把一次工具调用映射为宿主工具结果。"""
 
-    def __call__(self, arguments: Mapping[str, object]) -> ToolResult: ...
+    def __call__(self, arguments: Mapping[str, object]) -> ToolResultValue: ...
 
 
 class Invoker(Protocol):
@@ -59,7 +65,7 @@ class Invoker(Protocol):
         method: str,
         *args: object,
         **kwargs: object,
-    ) -> ToolResult: ...
+    ) -> ToolResultValue: ...
 
 
 @dataclass(frozen=True)
@@ -124,28 +130,29 @@ def _json_text(payload: object) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
-@dataclass(frozen=True)
-class _TextPart:
-    text: str
-    type: str = "text"
+@dataclass(frozen=True, slots=True)
+class ToolResultValue:
+    """本插件产出的工具结果。
 
+    宿主执行边界（``plugins.tools.api.coerce_result``）会重新构造 ``Result``
+    并逐块 ``isinstance(part, ContentPart)`` 校验，所以内容块必须是真的
+    ``plugins.ledger.contract.ContentPart``，不能用结构相似的本地类。
+    """
 
-@dataclass(frozen=True)
-class _ToolResult:
-    outcome: Literal["success", "denied", "error", "interrupted"]
+    outcome: Outcome
     parts: tuple[ContentPart, ...]
 
 
-def tool_error(message: str) -> ToolResult:
+def tool_error(message: str) -> ToolResultValue:
     """构造一个 error 结果；正文是给模型看的中文说明。"""
 
-    return _ToolResult("error", (_TextPart(message),))
+    return ToolResultValue("error", (ContentPart("text", message),))
 
 
-def tool_success(payload: object) -> ToolResult:
+def tool_success(payload: object) -> ToolResultValue:
     """把领域结果包装成 success 结果正文。"""
 
-    return _ToolResult("success", (_TextPart(_json_text(payload)),))
+    return ToolResultValue("success", (ContentPart("text", _json_text(payload)),))
 
 
 def _require_text(arguments: Mapping[str, object], key: str) -> str:
@@ -227,7 +234,7 @@ def _handler(name: str, invoke: Invoker) -> ToolExecutor:
     校验失败、凭据不可用或领域错误都返回 error 结果，交给模型说明原因。
     """
 
-    async def execute(arguments: Mapping[str, object]) -> ToolResult:
+    async def execute(arguments: Mapping[str, object]) -> ToolResultValue:
         try:
             if name == "list_collections":
                 return await invoke(
@@ -374,6 +381,7 @@ def build_tool_catalog(
                 ),
                 risk="read-only",
                 idempotent=True,
+                parallel=True,
                 execute=_handler("list_collections", invoke),
             ),
             ToolEntry(
@@ -387,6 +395,7 @@ def build_tool_catalog(
                 ),
                 risk="read-only",
                 idempotent=True,
+                parallel=True,
                 execute=_handler("continue_collection_query", invoke),
             ),
             ToolEntry(
@@ -400,6 +409,7 @@ def build_tool_catalog(
                 ),
                 risk="read-only",
                 idempotent=True,
+                parallel=True,
                 execute=_handler("count_collections", invoke),
             ),
             ToolEntry(
@@ -413,6 +423,7 @@ def build_tool_catalog(
                 ),
                 risk="read-only",
                 idempotent=True,
+                parallel=True,
                 execute=_handler("get_collection_status", invoke),
             ),
             ToolEntry(
@@ -435,6 +446,7 @@ def build_tool_catalog(
                 ),
                 risk="read-only",
                 idempotent=True,
+                parallel=True,
                 execute=_handler("prepare_collection_query", invoke),
             ),
             ToolEntry(
@@ -463,6 +475,7 @@ def build_tool_catalog(
                 ),
                 risk="read-only",
                 idempotent=True,
+                parallel=True,
                 execute=_handler("prepare_collection_status_update", invoke),
             ),
             ToolEntry(
@@ -477,6 +490,7 @@ def build_tool_catalog(
                 ),
                 risk="read-only",
                 idempotent=True,
+                parallel=True,
                 execute=_handler("prepare_anime_progress_update", invoke),
             ),
             ToolEntry(
@@ -512,6 +526,7 @@ def build_tool_catalog(
                 ),
                 risk="read-only",
                 idempotent=True,
+                parallel=True,
                 execute=_handler("get_anime_update_alerts", invoke),
             ),
             ToolEntry(

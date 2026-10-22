@@ -3,8 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-
-from bangumi.anilist import (
+from bangumi_test_plugin.bangumi.anilist import (
     ANILIST_API_URL,
     AniListApiError,
     AniListClient,

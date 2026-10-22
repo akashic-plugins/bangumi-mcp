@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-import importlib.util
+import importlib
 import sys
 import types
 from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
-
-from bangumi._host_contract import CredentialRef
-from bangumi.settings import (
+from bangumi_test_plugin.bangumi._host_contract import CredentialRef
+from bangumi_test_plugin.bangumi.settings import (
     DEFAULT_USER_AGENT,
     BangumiConfigError,
     build_config_values,
@@ -196,11 +195,9 @@ def test_settings_to_config_values_omits_absent_anilist_token() -> None:
 
 
 def _load_configure_module() -> types.ModuleType:
-    path = Path(__file__).resolve().parents[1] / "configure.py"
-    spec = importlib.util.spec_from_file_location("bangumi_configure", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    """从伪包里导入 configure，让它的相对导入（`.bangumi.…`）成立。"""
+
+    module = importlib.import_module("bangumi_test_plugin.configure")
     return module
 
 
@@ -222,6 +219,11 @@ class _HostRecorder:
         assert data_dir == self.data_dir
         self.saved.append(dict(values))
 
+    def load_config(self, data_dir: Path) -> tuple[dict[str, object], str]:
+        assert data_dir == self.data_dir
+        values = self.saved[-1] if self.saved else {}
+        return dict(values), "revision"
+
     def upgrade_config(self, data_dir: Path, convert: object) -> Path:
         assert data_dir == self.data_dir
         self.upgraded += 1
@@ -237,6 +239,8 @@ def _install_fake_host(monkeypatch: pytest.MonkeyPatch, recorder: _HostRecorder)
     config_input.save_credential = recorder.save_credential
     config_input.save_config = recorder.save_config
     config_input.upgrade_config = recorder.upgrade_config
+    # configure 写完会回读自校验（见 configure._verify_written_input）。
+    config_input.load_config = recorder.load_config
     composition.config_input = config_input
     agent.plugin_composition = composition
     monkeypatch.setitem(sys.modules, "agent", agent)
@@ -254,6 +258,22 @@ def _plugin_data_dir(tmp_path: Path) -> Path:
     return directory
 
 
+def _run_configure(
+    arguments: list[str],
+    *,
+    workspace: Path,
+) -> int:
+    """按宿主的命令签名调用 configure（见 plugin-contract-refresh 4.6）。
+
+    `main.py setup` 不再注入 `AKASHIC_PLUGIN_DATA_DIR`，数据目录由宿主的
+    `workspace` 参数推导为 `plugin-data/<name>-<marketplace>`。
+    旧实现的 `main(argv)` 只接收参数列表；目标实现必须额外接收 workspace。
+    """
+
+    module = _load_configure_module()
+    return module.main(arguments, workspace=workspace, config_path=workspace / "config.toml")
+
+
 def test_configure_writes_only_credential_refs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -261,13 +281,12 @@ def test_configure_writes_only_credential_refs(
     data_dir = _plugin_data_dir(tmp_path)
     recorder = _HostRecorder(data_dir)
     _install_fake_host(monkeypatch, recorder)
-    monkeypatch.setenv("AKASHIC_PLUGIN_DATA_DIR", str(data_dir))
     monkeypatch.setenv("AKASHIC_BANGUMI_ACCESS_TOKEN", "new-bangumi-token")
     monkeypatch.setenv("AKASHIC_BANGUMI_ANILIST_TOKEN", "new-anilist-token")
     monkeypatch.setenv("AKASHIC_BANGUMI_ANIME_PUSH_ENABLED", "true")
     monkeypatch.setenv("AKASHIC_BANGUMI_ANIME_PUSH_BEFORE_MINUTES", "20")
 
-    assert _load_configure_module().main([]) == 0
+    assert _run_configure([], workspace=tmp_path) == 0
 
     assert recorder.credentials == ["new-bangumi-token", "new-anilist-token"]
     assert len(recorder.saved) == 1
@@ -287,12 +306,11 @@ def test_configure_requires_access_token(
     data_dir = _plugin_data_dir(tmp_path)
     recorder = _HostRecorder(data_dir)
     _install_fake_host(monkeypatch, recorder)
-    monkeypatch.setenv("AKASHIC_PLUGIN_DATA_DIR", str(data_dir))
     monkeypatch.delenv("AKASHIC_BANGUMI_ACCESS_TOKEN", raising=False)
     monkeypatch.delenv("BANGUMI_ACCESS_TOKEN", raising=False)
 
     with pytest.raises(BangumiConfigError, match="Access Token"):
-        _load_configure_module().main([])
+        _run_configure([], workspace=tmp_path)
 
     assert recorder.saved == []
 
@@ -304,9 +322,8 @@ def test_configure_upgrade_converts_legacy_toml(
     data_dir = _plugin_data_dir(tmp_path)
     recorder = _HostRecorder(data_dir)
     _install_fake_host(monkeypatch, recorder)
-    monkeypatch.setenv("AKASHIC_PLUGIN_DATA_DIR", str(data_dir))
 
-    assert _load_configure_module().main(["--upgrade"]) == 0
+    assert _run_configure(["--upgrade"], workspace=tmp_path) == 0
 
     assert recorder.upgraded == 1
     assert recorder.credentials == ["legacy-anilist-token", "legacy-bangumi-token"]
@@ -326,22 +343,9 @@ def test_configure_rejects_unknown_arguments(
     data_dir = _plugin_data_dir(tmp_path)
     recorder = _HostRecorder(data_dir)
     _install_fake_host(monkeypatch, recorder)
-    monkeypatch.setenv("AKASHIC_PLUGIN_DATA_DIR", str(data_dir))
 
     with pytest.raises(BangumiConfigError, match="未知参数"):
-        _load_configure_module().main(["--access-token", "leak"])
-
-
-def test_configure_requires_data_dir(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    recorder = _HostRecorder(_plugin_data_dir(tmp_path))
-    _install_fake_host(monkeypatch, recorder)
-    monkeypatch.delenv("AKASHIC_PLUGIN_DATA_DIR", raising=False)
-
-    with pytest.raises(BangumiConfigError, match="数据目录"):
-        _load_configure_module().main([])
+        _run_configure(["--access-token", "leak"], workspace=tmp_path)
 
 
 def test_configure_plain_mode_reads_no_legacy_file(
@@ -355,23 +359,26 @@ def test_configure_plain_mode_reads_no_legacy_file(
     legacy.write_text('access_token = "old"\n', encoding="utf-8")
     recorder = _HostRecorder(data_dir)
     _install_fake_host(monkeypatch, recorder)
-    monkeypatch.setenv("AKASHIC_PLUGIN_DATA_DIR", str(data_dir))
     monkeypatch.setenv("AKASHIC_BANGUMI_ACCESS_TOKEN", "new-token")
 
-    assert _load_configure_module().main([]) == 0
+    assert _run_configure([], workspace=tmp_path) == 0
 
     assert recorder.upgraded == 0
     assert legacy.read_text(encoding="utf-8") == 'access_token = "old"\n'
 
 
-def test_docs_teach_the_setup_flow_instead_of_plaintext_files() -> None:
-    """README 与 Skill 必须教用户走 main.py setup，而不是手写明文配置。"""
+def test_docs_teach_the_configure_command_instead_of_plaintext_files() -> None:
+    """README 与 Skill 必须教用户走插件自有配置命令，而不是手写明文配置。
+
+    宿主 `main.py setup` 已不再发现或执行 `configure.py`（见
+    docs/design/plugin-contract-refresh.md 4.6），文档必须指向 `bangumi-configure`。
+    """
 
     repo = Path(__file__).resolve().parents[1]
     readme = (repo / "README.md").read_text(encoding="utf-8")
     skill = (repo / "skills/bangumi/SKILL.md").read_text(encoding="utf-8")
 
-    assert "main.py setup" in readme
+    assert "bangumi-configure" in readme
     assert "config.local.toml" not in skill
     for env_name in (
         "AKASHIC_BANGUMI_ACCESS_TOKEN",
@@ -383,4 +390,4 @@ def test_docs_teach_the_setup_flow_instead_of_plaintext_files() -> None:
     ):
         assert env_name in readme, env_name
     assert "mcp/requirements.txt" not in readme
-    assert "main.py setup" in skill
+    assert "bangumi-configure" in skill

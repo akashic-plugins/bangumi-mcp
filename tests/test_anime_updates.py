@@ -7,17 +7,16 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
-from bangumi.anilist import AniListNotFoundError
-from bangumi.anime_updates import (
+from bangumi_test_plugin.bangumi.anilist import AniListNotFoundError
+from bangumi_test_plugin.bangumi.anime_updates import (
     AnimeUpdateCoordinator,
     AnimeUpdateStateError,
     AnimeUpdateStore,
     CatalogEpisode,
     CatalogSubject,
 )
-from bangumi.client import BangumiApiError
-from bangumi.settings import AnimePushSettings
+from bangumi_test_plugin.bangumi.client import BangumiApiError
+from bangumi_test_plugin.bangumi.settings import AnimePushSettings
 
 NOW = datetime(2026, 8, 5, 12, 0, tzinfo=timezone.utc)
 

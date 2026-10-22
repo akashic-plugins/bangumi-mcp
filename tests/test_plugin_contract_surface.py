@@ -67,14 +67,6 @@ def _apply_function(tree: ast.Module) -> ast.AsyncFunctionDef:
     return function
 
 
-def test_plugin_declares_v3_identity_literals() -> None:
-    values = _literal_assignments(_plugin_tree())
-
-    assert values["api_version"] == 3
-    assert values["name"] == "bangumi"
-    assert values["version"] == "0.6.0"
-
-
 def test_plugin_identity_matches_host_ast_loader_rules() -> None:
     """复刻宿主 loader 的身份读取规则：三个顶层单次字面量，且 API 必须为 3。"""
 

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
-from bangumi._host_contract import ToolResult
-from bangumi.tools import ToolCatalog, ToolExecutionError, build_tool_catalog
+from bangumi_test_plugin.bangumi._host_contract import ToolResult
+from bangumi_test_plugin.bangumi.tools import (
+    ToolCatalog,
+    ToolExecutionError,
+    build_tool_catalog,
+)
 
 
 async def _unwired(method: str, *args: object, **kwargs: object) -> ToolResult:

@@ -22,16 +22,16 @@
 from __future__ import annotations
 
 import os
-import sys
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
-from bangumi._host_contract import CredentialRef
-from bangumi.settings import (
+from .bangumi._host_contract import CredentialRef
+from .bangumi.settings import (
     DEFAULT_USER_AGENT,
     BangumiConfigError,
     SaveCredential,
     build_config_values,
+    parse_settings,
     upgrade_legacy_config,
 )
 
@@ -42,6 +42,10 @@ BEFORE_MINUTES_ENV = "AKASHIC_BANGUMI_ANIME_PUSH_BEFORE_MINUTES"
 TIMEZONE_ENV = "AKASHIC_BANGUMI_DISPLAY_TIMEZONE"
 USER_AGENT_ENV = "AKASHIC_BANGUMI_USER_AGENT"
 
+# 与 plugin.py 顶层字面量保持一致；配置命令运行在宿主进程内，不 import 插件入口。
+PLUGIN_NAME = "bangumi"
+PLUGIN_ID = "bangumi@github"
+
 SaveConfig = Callable[[Mapping[str, object]], None]
 UpgradeConfig = Callable[
     [Callable[[bytes], Mapping[str, object]]],
@@ -51,10 +55,22 @@ UpgradeConfig = Callable[
 _TRUE = {"1", "true", "yes", "on"}
 
 
-def main(argv: list[str] | None = None) -> int:
-    """运行插件配置程序；返回进程退出码。"""
+def main(
+    arguments: tuple[str, ...] | list[str] = (),
+    *,
+    workspace: Path | None = None,
+    config_path: Path | None = None,
+) -> int:
+    """运行插件配置命令；返回进程退出码。
 
-    args = list(sys.argv[1:] if argv is None else argv)
+    签名对齐宿主的 ``invoke_plugin_command``：``function(arguments,
+    workspace=…, config_path=…)``，且返回值必须是 ``int``。
+    ``workspace`` 由宿主校验后传入，数据目录从它推导。
+    宿主不再向配置命令注入数据目录环境变量，也不经由 ``main.py setup``。
+    """
+
+    del config_path
+    args = list(arguments)
     if args[:1] in (["--help"], ["-h"]):
         print(__doc__)
         return 0
@@ -62,12 +78,13 @@ def main(argv: list[str] | None = None) -> int:
         raise BangumiConfigError(f"未知参数: {args}")
 
     from agent.plugin_composition.config_input import (
+        load_config,
         save_config,
         save_credential,
         upgrade_config,
     )
 
-    data_dir = _data_dir()
+    data_dir = _data_dir(workspace)
 
     def save_credential_value(value: str) -> CredentialRef:
         return save_credential(data_dir, value)
@@ -88,6 +105,7 @@ def main(argv: list[str] | None = None) -> int:
         save_credential=save_credential_value,
         save_config=save_config_values,
     )
+    _verify_written_input(data_dir, load_config)
     print(f"已写入固定配置: {data_dir}")
     return 0
 
@@ -120,11 +138,38 @@ def _write_new_config(
     save_config(values)
 
 
-def _data_dir() -> Path:
-    raw = os.environ.get("AKASHIC_PLUGIN_DATA_DIR", "").strip()
-    if not raw:
-        raise BangumiConfigError("配置程序必须由 main.py setup 提供数据目录")
-    return Path(raw).expanduser()
+def _verify_written_input(
+    data_dir: Path,
+    load_config: Callable[[Path], tuple[dict[str, object], str]],
+) -> None:
+    """写完立即回读，确认宿主能解析出本插件认识的固定输入。
+
+    `config_input` 是宿主的内部写盘实现，没有对外兼容承诺；这里不假设写入
+    一定可读，发现格式漂移就明确失败，而不是留给下一次插件加载时报错。
+    """
+
+    parsed, _ = load_config(data_dir)
+    try:
+        _ = parse_settings(parsed)
+    except BangumiConfigError as error:
+        raise BangumiConfigError(
+            f"写入的固定配置无法被插件解析: {error}"
+        ) from error
+
+
+def _data_dir(workspace: Path | None) -> Path:
+    """由宿主 workspace 推导插件数据目录：``plugin-data/<name>-<marketplace>``。
+
+    与 ``agent/plugins/manifest.py:workspace_plugin_data_dir`` 同一规则；
+    市场名从插件身份后缀取，无后缀时用 ``builtin``。
+    """
+
+    if workspace is None:
+        raise BangumiConfigError("配置命令缺少 workspace 参数")
+    _, _, marketplace = PLUGIN_ID.partition("@")
+    return (
+        workspace / "plugin-data" / f"{PLUGIN_NAME}-{marketplace or 'builtin'}"
+    ).resolve()
 
 
 def _first_env(env: Mapping[str, str], names: tuple[str, ...]) -> str | None:

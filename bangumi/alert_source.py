@@ -39,31 +39,39 @@ class AlertBinding:
     contexts: BoundContextSource
     source_id: str = SOURCE_ID
 
-    def report(
+    async def report(
         self,
         payload: Mapping[str, object],
         *,
         now: datetime,
         expires_at: datetime | None = None,
     ) -> None:
+        """对同一个 event_id 先上报 Context（承载事实），再上报 Alert（触发器）。"""
+
         event_id = _event_id(payload)
         context = _context_payload(payload)
-        _ = self.contexts.report(
+        _ = await self.contexts.report(
             event_id=event_id,
             payload=context,
             observed_at=now,
             expires_at=now + CONTEXT_TTL,
         )
-        _ = self.alerts.report(
+        _ = await self.alerts.report(
             event_id=event_id,
             payload=context,
             observed_at=now,
             expires_at=expires_at,
         )
 
-    def is_terminal(self, payload: Mapping[str, object]) -> bool:
-        status = self.alerts.status(event_id=_event_id(payload))
+    async def is_terminal(self, payload: Mapping[str, object]) -> bool:
+        status = await self.alerts.status(event_id=_event_id(payload))
         return status in TERMINAL_STATUSES
+
+    def close(self) -> None:
+        """释放两个 source_id 的所有权；不调用会让下一次装载报「已有 owner」。"""
+
+        self.alerts.close()
+        self.contexts.close()
 
 
 @dataclass
@@ -75,7 +83,7 @@ class BangumiAlertBridge:
     batch_size: int = 50
     _reported: set[str] = field(default_factory=set, repr=False)
 
-    def tick(self, now: datetime) -> dict[str, int]:
+    async def tick(self, now: datetime) -> dict[str, int]:
         """上报尚未上报的事件，确认已到终态的事件。"""
 
         pending = _pending(self.store, self.batch_size)
@@ -83,13 +91,13 @@ class BangumiAlertBridge:
         acknowledged = 0
         for payload in pending:
             event_id = _event_id(payload)
-            if self.binding.is_terminal(payload):
+            if await self.binding.is_terminal(payload):
                 self._acknowledge(event_id, now)
                 acknowledged += 1
                 continue
             if event_id in self._reported:
                 continue
-            self.binding.report(payload, now=now)
+            await self.binding.report(payload, now=now)
             self._reported.add(event_id)
             reported += 1
         return {"reported": reported, "acknowledged": acknowledged}

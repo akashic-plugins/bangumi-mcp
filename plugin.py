@@ -14,7 +14,7 @@ from pathlib import Path
 
 from agent.plugin_composition import RUNTIME_STARTED, RUNTIME_STOPPING
 
-from bangumi._host_contract import (
+from .bangumi._host_contract import (
     ALERT_SOURCE,
     CONTEXT_SOURCE,
     CREDENTIALS,
@@ -26,16 +26,19 @@ from bangumi._host_contract import (
     PluginContext,
     ToolResult,
 )
-from bangumi.runtime import BangumiRuntime, build_runtime
-from bangumi.settings import parse_settings
-from bangumi.tools import ToolCatalog, ToolEntry
+from .bangumi.runtime import BangumiRuntime, build_runtime
+from .bangumi.settings import parse_settings
+from .bangumi.tools import ToolCatalog, ToolEntry
 
 api_version = 3
 name = "bangumi"
-version = "0.6.0"
+version = "0.7.0"
 desc = "查询 Bangumi 收藏与观看进度；写入需逐字确认"
 
 inject = (TOOLS, INSTALLED_ASSETS, CREDENTIALS, TIMERS)
+
+# 宿主的 `main.py setup` 不再执行插件 configure.py；配置入口改为插件自有命令。
+entrypoints = {"bangumi-configure": "configure.main"}
 
 
 async def apply(ctx: PluginContext) -> None:
@@ -66,7 +69,7 @@ async def _register_alert_bridge(
     """
 
     async def apply_alert_bridge(child: PluginContext) -> None:
-        _ = runtime.deploy_alert_bridge(child)
+        _ = await runtime.deploy_alert_bridge(child)
 
     _ = await ctx.inject(
         (ALERT_SOURCE, CONTEXT_SOURCE),
@@ -109,7 +112,7 @@ async def _register_tool_catalog(
             parameters=entry.parameters,
             open=_BoundBangumiTool(entry).open,
             idempotent=entry.idempotent,
-            risk=entry.risk,
+            parallel=entry.parallel,
         )
 
 

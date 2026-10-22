@@ -8,16 +8,16 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
-import plugin
-from bangumi._host_contract import (
+from bangumi_test_plugin import plugin
+from bangumi_test_plugin.bangumi._host_contract import (
     CREDENTIALS,
     INSTALLED_ASSETS,
     TIMERS,
     TOOLS,
     CredentialRef,
 )
-from bangumi.client import BangumiClient
+from bangumi_test_plugin.bangumi.client import BangumiClient
+
 from tests._catalog import discovery_catalog
 
 
@@ -33,7 +33,7 @@ class _RegisterCall:
     description: str
     parameters: Mapping[str, object]
     idempotent: bool
-    risk: str
+    parallel: bool
     open: Any
 
 
@@ -68,17 +68,18 @@ class _ToolServiceRecorder:
         capture: object = None,
         public: bool = True,
         idempotent: bool = False,
-        risk: str = "read-write",
-        search_hint: str | None = None,
+        parallel: bool = False,
+        exclusive_batch: bool = False,
+        release: object = None,
     ) -> object:
-        del ctx, capture, public, search_hint
+        del ctx, capture, public, exclusive_batch, release
         self.registered.append(
             _RegisterCall(
                 name=name,
                 description=description,
                 parameters=parameters,
                 idempotent=idempotent,
-                risk=risk,
+                parallel=parallel,
                 open=open,
             )
         )
@@ -279,7 +280,7 @@ def test_apply_registers_skills_and_every_catalog_tool(
         assert call.parameters == entry.parameters
         assert call.description == entry.description
         assert call.idempotent is entry.idempotent
-        assert call.risk == entry.risk
+        assert call.parallel is entry.parallel
 
 
 def test_registered_tool_invocation_reads_credential_lease(
@@ -298,7 +299,7 @@ def test_registered_tool_invocation_reads_credential_lease(
     result = asyncio.run(exercise())
 
     assert result.outcome == "success"
-    assert '"total":1' in result.parts[0].text
+    assert '"total":1' in result.parts[0].value
     assert credentials.opened == [
         {"access_token": CredentialRef(("bangumi-token", "rev"))}
     ]
@@ -321,7 +322,7 @@ def test_tool_validation_error_returns_error_result(
     result = asyncio.run(exercise())
 
     assert result.outcome == "error"
-    assert "subject_id" in result.parts[0].text
+    assert "subject_id" in result.parts[0].value
 
 
 def test_bound_tool_exposes_identity_metadata(

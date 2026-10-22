@@ -20,9 +20,8 @@ from ._host_contract import (
     CONTEXT_SOURCE,
     CredentialRef,
     PluginContext,
-    ToolResult,
 )
-from .alert_source import AlertBinding, BangumiAlertBridge
+from .alert_source import SOURCE_ID, AlertBinding, BangumiAlertBridge
 from .anime_push_loop import AnimeUpdateLoop, PluginTimersPort
 from .confirmation import ConfirmationStore
 from .query import CollectionQuerySessionStore, QueryConfirmationStore
@@ -32,7 +31,7 @@ from .service import (
     SubjectTypeFilter,
 )
 from .settings import BangumiRuntimeConfig, BangumiSettings
-from .tools import ToolExecutionError, tool_error, tool_success
+from .tools import ToolExecutionError, ToolResultValue, tool_error, tool_success
 
 if TYPE_CHECKING:
     from .anime_updates import AnimeUpdateCoordinator
@@ -268,24 +267,43 @@ class BangumiRuntime:
 
     # ---- 告警投递桥（依赖第一方 eventmail）----
 
-    def deploy_alert_bridge(self, child: PluginContext) -> BangumiAlertBridge:
-        """在 eventmail 可用的子 Fiber 上登记告警与上下文来源。"""
+    async def deploy_alert_bridge(self, child: PluginContext) -> BangumiAlertBridge:
+        """在 eventmail 可用的子 Fiber 上绑定告警与上下文来源。
+
+        v2 的 ``bind`` 独占 ``source_id``，所以必须在同一 Fiber 上登记 ``close``
+        Effect。``effect`` 本身也可能失败（Fiber 正在卸载），此时 binding 已拿到
+        所有权却无人释放，会导致下次装载直接报「已有 owner」——因此逐个兜底。
+        """
+
+        alerts = child.require(ALERT_SOURCE).bind(SOURCE_ID)
+        try:
+            _ = await child.effect(
+                lambda: alerts.close, label="bangumi-alert-source-binding",
+            )
+        except BaseException:
+            alerts.close()
+            raise
+        contexts = child.require(CONTEXT_SOURCE).bind(SOURCE_ID)
+        try:
+            _ = await child.effect(
+                lambda: contexts.close, label="bangumi-context-source-binding",
+            )
+        except BaseException:
+            contexts.close()
+            raise
 
         self._bridge = BangumiAlertBridge(
             store=self._anime_store(),
-            binding=AlertBinding(
-                alerts=child.require(ALERT_SOURCE).bind("bangumi"),
-                contexts=child.require(CONTEXT_SOURCE).bind("bangumi"),
-            ),
+            binding=AlertBinding(alerts=alerts, contexts=contexts),
         )
         return self._bridge
 
-    def sync_pending_alerts(self) -> dict[str, int]:
+    async def sync_pending_alerts(self) -> dict[str, int]:
         """把本地 pending 事件同步进告警邮箱；没有桥时是空操作。"""
 
         if self._bridge is None:
             return {"reported": 0, "acknowledged": 0}
-        return self._bridge.tick(datetime.now(timezone.utc))
+        return await self._bridge.tick(datetime.now(timezone.utc))
 
     # ---- 工具入口 ----
 
@@ -294,7 +312,7 @@ class BangumiRuntime:
         method: str,
         *args: object,
         **kwargs: object,
-    ) -> ToolResult:
+    ) -> ToolResultValue:
         """在凭据租约内执行一次领域调用，并把错误转成工具结果。"""
 
         def work() -> object:

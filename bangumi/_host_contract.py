@@ -55,9 +55,11 @@ except ModuleNotFoundError:  # pragma: no cover - 只在没有宿主 SDK 的离�
 
 
 TOOLS_SERVICE_NAME = "tools.v1"
-INSTALLED_ASSETS_SERVICE_NAME = "core.installed_assets.v1"
+INSTALLED_ASSETS_SERVICE_NAME = "assets.installed.v1"
 CREDENTIALS_SERVICE_NAME = "core.credentials"
-TIMERS_SERVICE_NAME = "core.timers"
+TIMERS_SERVICE_NAME = "timers.v1"
+
+Outcome = Literal["success", "denied", "error", "interrupted"]
 
 _TOOL_NAME = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
@@ -152,12 +154,9 @@ class ToolCatalogService(Protocol):
         capture: Capture | None = None,
         public: bool = True,
         idempotent: bool = False,
-        risk: Literal[
-            "read-only",
-            "read-write",
-            "external-side-effect",
-        ] = "read-write",
-        search_hint: str | None = None,
+        parallel: bool = False,
+        exclusive_batch: bool = False,
+        release: object = None,
     ) -> ToolRef: ...
 
     def view(self, *refs: ToolRef) -> ToolView: ...
@@ -230,9 +229,13 @@ class PluginTimers(Protocol):
 
 
 class BoundAlertSource(Protocol):
-    """``eventmail.alert_source.v1``：上报告警并查询投递终态。"""
+    """``eventmail.alert_source.v2``：上报告警并查询投递终态。
 
-    def report(
+    v2 的两个变化：``report`` / ``status`` 是 async；新增 ``close()`` 释放
+    ``source_id`` 所有权，不调用会让下一次装载直接报「已有 owner」。
+    """
+
+    async def report(
         self,
         *,
         event_id: str,
@@ -241,7 +244,9 @@ class BoundAlertSource(Protocol):
         expires_at: datetime | None = None,
     ) -> Mapping[str, object]: ...
 
-    def status(self, *, event_id: str) -> str | None: ...
+    async def status(self, *, event_id: str) -> str | None: ...
+
+    def close(self) -> None: ...
 
 
 class AlertSourceServices(Protocol):
@@ -249,13 +254,13 @@ class AlertSourceServices(Protocol):
 
 
 class BoundContextSource(Protocol):
-    """``eventmail.context_source.v1``：上报只读上下文材料。
+    """``eventmail.context_source.v2``：上报只读上下文材料。
 
     这是告警正文进入 Wake 提示词的唯一通道：``active_context`` 会把 payload
-    原样渲染进 ``context_events``。
+    原样渲染进 ``context_events``。与 AlertSource 一样是 async 且需要 ``close()``。
     """
 
-    def report(
+    async def report(
         self,
         *,
         event_id: str,
@@ -263,6 +268,8 @@ class BoundContextSource(Protocol):
         observed_at: datetime,
         expires_at: datetime | None = None,
     ) -> Mapping[str, object]: ...
+
+    def close(self) -> None: ...
 
 
 class ContextSourceServices(Protocol):
@@ -289,9 +296,9 @@ CREDENTIALS = ServiceKey[CredentialClients](CREDENTIALS_SERVICE_NAME)
 TIMERS = ServiceKey[PluginTimers](TIMERS_SERVICE_NAME)
 
 # eventmail 是第一方插件提供的告警/上下文邮箱；外部插件通过它的公开 key 接入。
-ALERT_SOURCE = ServiceKey[AlertSourceServices]("eventmail.alert_source.v1")
+ALERT_SOURCE = ServiceKey[AlertSourceServices]("eventmail.alert_source.v2")
 CONTEXT_SOURCE = ServiceKey[ContextSourceServices](
-    "eventmail.context_source.v1"
+    "eventmail.context_source.v2"
 )
 
 
@@ -331,6 +338,7 @@ __all__ = [
     "InstalledAsset",
     "InstalledAssets",
     "OpenTool",
+    "Outcome",
     "PluginContext",
     "PluginTimers",
     "ProviderClient",

@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import pytest
-
-from bangumi.confirmation import (
+from bangumi_test_plugin.bangumi.confirmation import (
     ConfirmationError,
     ConfirmationStore,
     PreparedUpdate,

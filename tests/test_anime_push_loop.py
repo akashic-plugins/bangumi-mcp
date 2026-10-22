@@ -1,21 +1,24 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 
 import pytest
-
-import plugin
-from bangumi._host_contract import (
+from bangumi_test_plugin import plugin
+from bangumi_test_plugin.bangumi._host_contract import (
     CREDENTIALS,
     INSTALLED_ASSETS,
     TIMERS,
     TOOLS,
     CredentialRef,
 )
-from bangumi.anime_push_loop import AnimeUpdateLoop
-from bangumi.anime_updates import AnimeUpdateCoordinator, AnimeUpdateStore
+from bangumi_test_plugin.bangumi.anime_push_loop import AnimeUpdateLoop
+from bangumi_test_plugin.bangumi.anime_updates import (
+    AnimeUpdateCoordinator,
+    AnimeUpdateStore,
+)
+
 from tests.test_apply_registration import (
     _CONFIG,
     _AssetServiceRecorder,
@@ -24,6 +27,15 @@ from tests.test_apply_registration import (
     _FakeTimers,
     _ToolServiceRecorder,
 )
+
+
+def _record_sync(syncs: list[int]) -> Callable[[], Awaitable[None]]:
+    """返回一个 async 回调：v2 告警桥是 async，循环必须 await 它而不是丢进线程池。"""
+
+    async def sync() -> None:
+        syncs.append(1)
+
+    return sync
 
 
 class _BlockingTimerHandle:
@@ -82,7 +94,7 @@ def test_loop_runs_alert_sync_after_each_due_step() -> None:
     loop = AnimeUpdateLoop(
         coordinator=coordinator,  # type: ignore[arg-type]
         timers=_BlockingTimers(),  # type: ignore[arg-type]
-        alert_sync=lambda: syncs.append(1),
+        alert_sync=_record_sync(syncs),
     )
 
     async def exercise() -> None:
@@ -134,7 +146,7 @@ def test_loop_runs_steps_and_schedules_timer_waits() -> None:
 
     assert "catalog" in coordinator.calls
     assert "due" in coordinator.calls
-    assert timers.handles, "loop 必须用 core.timers 等待而不是自己 sleep"
+    assert timers.handles, "loop 必须用 timers.v1 的一次等待而不是自己 sleep"
     assert timers.handles[0].cancelled is True
 
 
@@ -177,7 +189,7 @@ def test_coordinator_exposes_public_step_api(tmp_path: Path) -> None:
     class _AniList:
         pass
 
-    from bangumi.settings import AnimePushSettings
+    from bangumi_test_plugin.bangumi.settings import AnimePushSettings
 
     coordinator = AnimeUpdateCoordinator(
         store,
@@ -255,8 +267,8 @@ def test_apply_registers_refresh_lifecycle_only_when_enabled(
     assert [name for _, _, name in enabled.optional] == ["bangumi-alert-bridge"]
     dependencies, _, _ = enabled.optional[0]
     assert [getattr(key, "name", "") for key in dependencies] == [
-        "eventmail.alert_source.v1",
-        "eventmail.context_source.v1",
+        "eventmail.alert_source.v2",
+        "eventmail.context_source.v2",
     ]
 
 

@@ -32,7 +32,7 @@ __all__ = [
 ]
 
 DEFAULT_USER_AGENT = (
-    "akashic-plugins/bangumi-mcp/0.6.0 "
+    "akashic-plugins/bangumi-mcp/0.7.0 "
     "(https://github.com/akashic-plugins/bangumi-mcp)"
 )
 

@@ -14,11 +14,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: kachofugetsu09/akashic-agent
+          path: .cache/akashic-agent
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Install dependencies
-        run: pip install -r requirements.txt -r requirements-dev.txt
+          cache: pip
+          cache-dependency-path: |
+            .cache/akashic-agent/requirements.txt
+            .cache/akashic-agent/requirements-dev.txt
+      - name: Install host dependencies
+        # 工具结果使用 plugins.ledger.contract.ContentPart，测试需要真实宿主。
+        run: pip install -r .cache/akashic-agent/requirements.txt -r .cache/akashic-agent/requirements-dev.txt
       - name: Run tests
-        # tests/test_plugin_contract_surface.py 校验 V3 顶层身份与工具目录合同。
+        env:
+          AKASHIC_AGENT_ROOT: ${{ github.workspace }}/.cache/akashic-agent
         run: pytest

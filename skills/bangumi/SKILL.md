@@ -55,8 +55,8 @@ description: 分页查询用户的 Bangumi 收藏列表、单个条目状态和�
 - 标题和正文中的绝对时间及其时区是权威展示，不要改写为“刚刚”“N 分钟后”等相对时间。
 - 提醒由 Akashic 的 `wake` 投递链路在到期后自动发出，不经过本轮对话。不要把“插件已记录事件”说成“已经提醒过用户”：投递是否成功取决于 `wake` 是否配置了投递目标，模型无法从这里确认。
 - `get_anime_update_alerts` 只读返回本地已到期的放送事件；`acknowledge_anime_update_alerts` 只在用户明确要求清理这些事件时调用。不要为了查询、重放或修改提醒而调用它们。
-- 用户想停止提醒时，说明应在 Akashic `main.py setup` 里把 `anime_push.enabled` 设为关闭；不要删除或重建提醒数据库。
+- 用户想停止提醒时，说明用 `AKASHIC_BANGUMI_ANIME_PUSH_ENABLED=false` 重新运行 `main.py bangumi-configure`；不要删除或重建提醒数据库。
 
 ## 凭据
 
-不要请求用户在对话中粘贴 Access Token。Token 由用户通过 Akashic `main.py setup` 写入私有凭据库，不得出现在回复、日志、命令参数或工具结果中。配置与升级只能由用户显式执行，模型不得代替用户运行配置程序。
+不要请求用户在对话中粘贴 Access Token。Token 由用户通过 Akashic `main.py bangumi-configure` 写入私有凭据库，不得出现在回复、日志、命令参数或工具结果中。配置与升级只能由用户显式执行，模型不得代替用户运行配置程序。

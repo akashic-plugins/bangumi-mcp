@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import pytest
-
-from bangumi.query import (
+from bangumi_test_plugin.bangumi.query import (
     CollectionQuerySessionStore,
     PreparedCollectionQuery,
     QueryConfirmationStore,

@@ -3,9 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-
-from bangumi.client import API_BASE_URL, BangumiApiError, BangumiClient
-from bangumi.settings import BangumiRuntimeConfig
+from bangumi_test_plugin.bangumi.client import (
+    API_BASE_URL,
+    BangumiApiError,
+    BangumiClient,
+)
+from bangumi_test_plugin.bangumi.settings import BangumiRuntimeConfig
 
 
 class FakeResponse:
