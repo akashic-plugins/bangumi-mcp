@@ -9,3 +9,4 @@ config.local.toml
 .env.*
 tokens*.json
 *.log
+.cache/
