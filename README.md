@@ -87,12 +87,15 @@ export AKASHIC_BANGUMI_ACCESS_TOKEN="<Bangumi Access Token>"
 ## 放送提醒
 
 - 提醒依据是 AniList `nextAiringEpisode.airingAt`，精度规范化到分钟；它表示计划放送，不代表流媒体、字幕或片源已经上线。
+- `notify_before_minutes=0` 从计划放送时刻开始等待投递；可设置为 `0` 至 `1440` 的整数以提前提醒。
 - 插件只处理 Bangumi 标记为“在看”的动画，并在记录提醒前通过逐集接口确认该集尚未标记为“看过”。
 - 刷新循环把到期事件写入 `plugin-data/bangumi-github/anime_updates.db`，再通过 `eventmail` 告警邮箱交给 `wake` 插件投递到用户渠道。
+- 到达提醒时刻后，Akashic 在下一次 tick 读取事件。Gate、Judge、会话繁忙或 channel 状态可能使消息延后数分钟。
 - **投递前提**：Akashic 需要安装并启用 `eventmail` 与 `wake`，且为 `wake` 配置投递目标（`delivery` 的 channel / recipient / session）。未配置时告警会留在邮箱里，不会送到用户，但不会报错。
 - `eventmail` 不可用时自动降级：抓取与本地事件库照常运行，`get_anime_update_alerts` / `acknowledge_anime_update_alerts` 仍可手动查看与清理。
+- 启用 `anime_push` 必须配置 AniList Access Token（见上方环境变量表）。
 - AniList 与 Bangumi 没有共同稳定 ID。自动匹配只接受唯一严格候选；失败时可用固定配置中的 `media_id_overrides` 明确指定 AniList media ID。
-- 关闭 `anime_push.enabled` 会停止抓取与投递，但不会删除 `anime_updates.db`。
+- 缓存、待投递事件和 ACK 保存在同一 plugin-data 目录下的 `anime_updates.db`。关闭 `anime_push.enabled` 不会删除该数据库。
 
 ## 设计文档
 

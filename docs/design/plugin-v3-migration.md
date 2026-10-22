@@ -169,6 +169,8 @@ V3 里有两条路，**推荐方案 A**：
 
 - `eventmail.alert_source.v1` 提供 `bind(source_id).report(...)` / `status(...)`；
   `wake` 以 `owner="alert"` 流程消费并投递用户可见消息。
+  > 本节记录的是 2026-09-16 的事实。上游后来升到 **v2**（`report`/`status` 变 async、
+  > 新增 `close()`），迁移见 [插件契约刷新](plugin-contract-refresh.md) 4.2 / 4.5。
 - 关键约束（已核实）：`wake` 的 alert 阶段只把 `Request.alert_ref`（三个标识）
   放进上下文，**payload 不渲染**；模型能看到的是 `active_context()` 返回的
   `context_events`，其 payload 原样进提示词。

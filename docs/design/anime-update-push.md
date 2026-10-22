@@ -10,10 +10,14 @@
 > 早先版本认为上游没有可用的主动信息源能力；这个判断是错的。真正的扩展点不在
 > `agent/plugin_composition` 的导出里，而在第一方 `eventmail` 插件提供的公开服务：
 >
-> - `eventmail.alert_source.v1`：`bind(source_id).report(event_id, payload, observed_at, expires_at)`
+> - `eventmail.alert_source.v2`：`await bind(source_id).report(...)`
 >   上报告警，`status(event_id)` 读投递终态（`pending` / `selected` / `delivered` /
 >   `skipped` / `expired`）；
-> - `eventmail.context_source.v1`：同签名上报只读上下文材料。
+> - `eventmail.context_source.v2`：同签名上报只读上下文材料。
+>
+> v2 相对 v1 的三处变化：`report` / `status` 改为 async；binding 新增 `close()`
+> 释放 `source_id` 所有权；同一 `source_id` 释放前不可重复绑定。
+> 详见 [插件契约刷新](plugin-contract-refresh.md) 4.5。
 >
 > **为什么必须两个通道都用**：`wake` 的 alert 阶段只把
 > `Request.alert_ref`（`source_id` / `event_id` / `mail_id` 三个标识）放进上下文，
