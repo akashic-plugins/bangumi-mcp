@@ -49,11 +49,15 @@ export AKASHIC_BANGUMI_ACCESS_TOKEN="<Bangumi Access Token>"
 
 | 环境变量 | 含义 |
 |---|---|
-| `AKASHIC_BANGUMI_ANILIST_TOKEN` | AniList Access Token；放送提醒需要 |
+| `AKASHIC_BANGUMI_ANILIST_TOKEN` | AniList Access Token；**启用放送提醒时必须提供** |
 | `AKASHIC_BANGUMI_ANIME_PUSH_ENABLED` | `1` / `true` 启用放送提醒抓取 |
 | `AKASHIC_BANGUMI_ANIME_PUSH_BEFORE_MINUTES` | 提前提醒分钟数，`0` 至 `1440` |
 | `AKASHIC_BANGUMI_DISPLAY_TIMEZONE` | 展示用 IANA 时区，默认 `Asia/Shanghai` |
 | `AKASHIC_BANGUMI_USER_AGENT` | 覆盖默认 User-Agent |
+
+**放送提醒必须同时满足两个条件**：`ANIME_PUSH_ENABLED` 为真，且 AniList Token 非空。
+只打开开关而没有 Token 时，后台刷新**不会启动**（`background_refresh_enabled` 要求两者同时成立），
+本地事件库也不会新增记录，界面上不会有任何报错。启用前请先确认 Token 已写入。
 
 `media_id_overrides`（AniList 自动匹配失败时的人工映射）需要在固定配置里手工补充，左侧是 Bangumi subject ID：
 
