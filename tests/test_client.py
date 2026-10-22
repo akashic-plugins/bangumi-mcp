@@ -133,7 +133,7 @@ def test_collection_list_rejects_invalid_request_pagination(
 ) -> None:
     session = FakeSession()
 
-    with pytest.raises(ValueError):
+    with pytest.raises((TypeError, ValueError)):
         client(session).list_collections(  # type: ignore[arg-type]
             "tester",
             limit=limit,

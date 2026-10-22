@@ -967,7 +967,8 @@ class AnimeUpdateCoordinator:
                         schedule["mapping_fingerprint"]
                     ),
                 )
-            except Exception as error:
+            # 单条事件失败要记录并安排重试；漏捕一类异常会让整轮轮询中断。
+            except Exception as error:  # noqa: BLE001 - 逐条隔离并转入重试
                 delay = _retry_delay(
                     error,
                     int(schedule["failure_count"]),
@@ -1101,7 +1102,8 @@ class AnimeUpdateCoordinator:
     ) -> float:
         try:
             await _run_sync_to_completion(method)
-        except Exception as error:
+        # 轮询步骤的任何异常都转成「失败并安排下次重试」，不允许冒泡终止循环。
+        except Exception as error:  # noqa: BLE001 - 异常即失败事实
             now = _aware_utc(self._clock())
             delay = _retry_delay(
                 error,
@@ -1391,12 +1393,12 @@ def _error_code(error: BaseException) -> str:
 
 def _validate_event_ids(event_ids: list[str]) -> list[str]:
     if not isinstance(event_ids, list):
-        raise ValueError("event_ids 必须是数组")
+        raise TypeError("event_ids 必须是数组")
     result: list[str] = []
     seen: set[str] = set()
     for value in event_ids:
         if not isinstance(value, str):
-            raise ValueError("event_id 必须是字符串")
+            raise TypeError("event_id 必须是字符串")
         clean = value.strip()
         prefix, separator, suffix = clean.partition(":")
         if prefix != "episode" or separator != ":" or not suffix.isdigit():
@@ -1468,7 +1470,7 @@ def _bounded_int(
     maximum: int | None = None,
 ) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"{label} 必须是整数")
+        raise TypeError(f"{label} 必须是整数")
     if value < minimum or (maximum is not None and value > maximum):
         raise ValueError(f"{label} 超出允许范围")
     return value

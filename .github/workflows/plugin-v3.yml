@@ -49,6 +49,9 @@ jobs:
               raise SystemExit(f"pytest 版本漂移: 期望 {expected}，实际 {actual}")
           print(f"pytest {actual} 与 requirements-dev.txt 一致")
           PY
+      - name: Lint
+        # ruff 钉在本仓库 requirements-dev.txt，规则集由它决定。
+        run: ruff check .
       - name: Run tests
         env:
           AKASHIC_AGENT_ROOT: ${{ github.workspace }}/.cache/akashic-agent

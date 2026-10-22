@@ -341,7 +341,7 @@ def _request_int(
     maximum: int | None = None,
 ) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"{label} 必须是整数")
+        raise TypeError(f"{label} 必须是整数")
     if value < minimum or (maximum is not None and value > maximum):
         bounds = (
             f"{minimum} 至 {maximum}"
@@ -366,7 +366,8 @@ def _response_int(
             minimum=minimum,
             maximum=maximum,
         )
-    except ValueError as error:
+    # 类型不符(TypeError)与越界(ValueError)都是响应不合约，统一转成 API 错误。
+    except (TypeError, ValueError) as error:
         raise BangumiApiError(str(error)) from None
 
 

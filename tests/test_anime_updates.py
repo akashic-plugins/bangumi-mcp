@@ -403,9 +403,11 @@ def test_ack_rejects_cross_table_state_mismatch(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("value", [-1, True, 1.5])
 def test_fetch_rejects_invalid_pagination(tmp_path: Path, value: object) -> None:
+    """类型不符抛 TypeError，越界抛 ValueError——两者都是参数不合约。"""
+
     store = store_at(tmp_path)
 
-    with pytest.raises(ValueError):
+    with pytest.raises((TypeError, ValueError)):
         store.fetch_pending(value, 50)  # type: ignore[arg-type]
 
 
