@@ -7,18 +7,16 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
-from src.anilist import AniListNotFoundError
-from src.anime_updates import (
+from bangumi_test_plugin.bangumi.anilist import AniListNotFoundError
+from bangumi_test_plugin.bangumi.anime_updates import (
     AnimeUpdateCoordinator,
     AnimeUpdateStateError,
     AnimeUpdateStore,
     CatalogEpisode,
     CatalogSubject,
 )
-from src.client import BangumiApiError
-from src.config import AnimePushRuntimeConfig
-
+from bangumi_test_plugin.bangumi.client import BangumiApiError
+from bangumi_test_plugin.bangumi.settings import AnimePushSettings
 
 NOW = datetime(2026, 8, 5, 12, 0, tzinfo=timezone.utc)
 
@@ -213,14 +211,14 @@ def coordinator(
     bangumi: FakeBangumi,
     *,
     anilist: FakeAniList | None = None,
-    config: AnimePushRuntimeConfig | None = None,
+    config: AnimePushSettings | None = None,
     now: datetime = NOW,
 ) -> AnimeUpdateCoordinator:
     return AnimeUpdateCoordinator(
         store,
         bangumi,
         anilist or FakeAniList(),
-        config or AnimePushRuntimeConfig(enabled=True),
+        config or AnimePushSettings(enabled=True),
         clock=lambda: now,
         jitter=lambda seconds: seconds,
     )
@@ -405,9 +403,11 @@ def test_ack_rejects_cross_table_state_mismatch(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("value", [-1, True, 1.5])
 def test_fetch_rejects_invalid_pagination(tmp_path: Path, value: object) -> None:
+    """类型不符抛 TypeError，越界抛 ValueError——两者都是参数不合约。"""
+
     store = store_at(tmp_path)
 
-    with pytest.raises(ValueError):
+    with pytest.raises((TypeError, ValueError)):
         store.fetch_pending(value, 50)  # type: ignore[arg-type]
 
 
@@ -417,7 +417,7 @@ def test_catalog_and_schedule_refresh_cache_successive_future_episodes(
     store = store_at(tmp_path)
     bangumi = FakeBangumi()
     anilist = FakeAniList(next_episode=7)
-    config = AnimePushRuntimeConfig(
+    config = AnimePushSettings(
         enabled=True,
         media_id_overrides={42: 154587},
     )
@@ -458,7 +458,7 @@ def test_automatic_mapping_requires_unique_strict_candidate(tmp_path: Path) -> N
 def test_missing_explicit_override_invalidates_old_mapping(tmp_path: Path) -> None:
     store = store_at(tmp_path)
     seed_schedule(store)
-    config = AnimePushRuntimeConfig(
+    config = AnimePushSettings(
         enabled=True,
         media_id_overrides={42: 999999},
     )
@@ -537,7 +537,7 @@ def test_due_interval_is_not_jittered(tmp_path: Path) -> None:
         store,
         FakeBangumi(),
         FakeAniList(),
-        AnimePushRuntimeConfig(enabled=True),
+        AnimePushSettings(enabled=True),
         clock=lambda: NOW,
         jitter=lambda seconds: seconds * 2,
     )

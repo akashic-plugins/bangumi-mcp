@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any, Protocol
 
 import requests
-
 
 ANILIST_API_URL = "https://graphql.anilist.co"
 REQUEST_TIMEOUT = (3.05, 15.0)
@@ -86,11 +85,18 @@ class AniListClient:
         *,
         user_agent: str,
         token: str | None = None,
+        token_provider: Callable[[], str | None] | None = None,
         session: HttpTransport | None = None,
     ) -> None:
         self._user_agent = user_agent
         self._token = token
+        self._token_provider = token_provider
         self._session: HttpTransport = session or requests
+
+    def _current_token(self) -> str | None:
+        if self._token_provider is not None:
+            return self._token_provider()
+        return self._token
 
     def search_anime(self, search: str) -> list[dict[str, Any]]:
         clean = search.strip()
@@ -131,8 +137,9 @@ class AniListClient:
             "Content-Type": "application/json",
             "User-Agent": self._user_agent,
         }
-        if self._token:
-            headers["Authorization"] = f"Bearer {self._token}"
+        token = self._current_token()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
         try:
             response = self._session.request(
                 "POST",

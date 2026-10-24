@@ -1,0 +1,58 @@
+name: plugin-v3
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: kachofugetsu09/akashic-agent
+          path: .cache/akashic-agent
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            .cache/akashic-agent/requirements.txt
+            .cache/akashic-agent/requirements-dev.txt
+            requirements.txt
+            requirements-dev.txt
+      - name: Install dependencies
+        # 工具结果使用 plugins.ledger.contract.ContentPart，测试需要真实宿主；
+        # 同时装本仓库的 dev 依赖，避免 pytest 版本随宿主漂移。
+        run: |
+          pip install -r .cache/akashic-agent/requirements.txt
+          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Check pytest version matches this repo
+        # 宿主 dev 依赖是 pytest>=9；本仓库锁 8.4.2，必须以后者为准。
+        run: |
+          python - <<'PY'
+          import re, subprocess
+          expected = re.search(
+              r"pytest==([\d.]+)",
+              open("requirements-dev.txt", encoding="utf-8").read(),
+          ).group(1)
+          actual = subprocess.check_output(
+              [__import__("sys").executable, "-m", "pytest", "--version"], text=True
+          ).split()[1]
+          if actual != expected:
+              raise SystemExit(f"pytest 版本漂移: 期望 {expected}，实际 {actual}")
+          print(f"pytest {actual} 与 requirements-dev.txt 一致")
+          PY
+      - name: Lint
+        # ruff 钉在本仓库 requirements-dev.txt，规则集由它决定。
+        run: ruff check .
+      - name: Run tests
+        env:
+          AKASHIC_AGENT_ROOT: ${{ github.workspace }}/.cache/akashic-agent
+        run: pytest

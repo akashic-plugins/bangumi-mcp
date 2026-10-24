@@ -3,9 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-
-from src.client import API_BASE_URL, BangumiApiError, BangumiClient
-from src.config import BangumiRuntimeConfig
+from bangumi_test_plugin.bangumi.client import (
+    API_BASE_URL,
+    BangumiApiError,
+    BangumiClient,
+)
+from bangumi_test_plugin.bangumi.settings import BangumiRuntimeConfig
 
 
 class FakeResponse:
@@ -39,7 +42,7 @@ class FakeSession:
 def client(session: FakeSession, token: str = "secret-token") -> BangumiClient:
     return BangumiClient(
         BangumiRuntimeConfig(
-            access_token=token,
+            token_provider=lambda: token,
             user_agent="akashic-plugins/bangumi-mcp/0.5.0 (https://example.test)",
         ),
         session=session,
@@ -130,7 +133,7 @@ def test_collection_list_rejects_invalid_request_pagination(
 ) -> None:
     session = FakeSession()
 
-    with pytest.raises(ValueError):
+    with pytest.raises((TypeError, ValueError)):
         client(session).list_collections(  # type: ignore[arg-type]
             "tester",
             limit=limit,

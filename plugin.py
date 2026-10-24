@@ -1,107 +1,154 @@
+"""Bangumi 插件 V3 入口。
+
+底座只读取本文件顶层的 ``name`` / ``version`` / ``api_version`` 三个字面量，
+再调用唯一入口 ``apply(ctx)``。配置、凭据、工具与 Skill 的注册全部在
+``apply`` 内通过宿主 ServiceKey 完成；本模块不导出任何 V2 类式插件协议，
+也没有模块级配置导出。
+"""
+
 from __future__ import annotations
 
-from collections.abc import Mapping
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
+from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from agent.plugin_composition import RUNTIME_STARTED, RUNTIME_STOPPING
 
-from agent.plugins import McpServerSpec, Plugin, ProactiveSourceSpec
-
-
-DEFAULT_USER_AGENT = (
-    "akashic-plugins/bangumi-mcp/0.5.0 "
-    "(https://github.com/akashic-plugins/bangumi-mcp)"
+from .bangumi._host_contract import (
+    ALERT_SOURCE,
+    CONTEXT_SOURCE,
+    CREDENTIALS,
+    INSTALLED_ASSETS,
+    TIMERS,
+    TOOLS,
+    BoundTool,
+    CallSource,
+    PluginContext,
+    ToolResult,
 )
+from .bangumi.runtime import BangumiRuntime, build_runtime
+from .bangumi.settings import parse_settings
+from .bangumi.tools import ToolCatalog, ToolEntry
+
+api_version = 3
+name = "bangumi"
+version = "0.7.0"
+desc = "查询 Bangumi 收藏与观看进度；写入需逐字确认"
+
+inject = (TOOLS, INSTALLED_ASSETS, CREDENTIALS, TIMERS)
+
+# 宿主的 `main.py setup` 不再执行插件 configure.py；配置入口改为插件自有命令。
+entrypoints = {"bangumi-configure": "configure.main"}
 
 
-class AnimePushConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+async def apply(ctx: PluginContext) -> None:
+    """解析固定配置，注册 Skill 资产、工具目录与放送刷新循环。"""
 
-    enabled: bool = Field(default=False, strict=True)
-    notify_before_minutes: int = Field(default=0, ge=0, le=1440, strict=True)
-    display_timezone: str = "Asia/Shanghai"
-    anilist_token: SecretStr | None = None
-    media_id_overrides: dict[int, int] = Field(default_factory=dict)
-
-    @field_validator("display_timezone")
-    @classmethod
-    def validate_timezone(cls, value: str) -> str:
-        clean = value.strip()
-        if not clean:
-            raise ValueError("display_timezone 必须是非空时区名称")
-        try:
-            ZoneInfo(clean)
-        except ZoneInfoNotFoundError as error:
-            raise ValueError("display_timezone 不是有效 IANA 时区") from error
-        return clean
-
-    @field_validator("media_id_overrides", mode="before")
-    @classmethod
-    def validate_overrides(cls, value: object) -> dict[int, int]:
-        if value is None:
-            return {}
-        if not isinstance(value, Mapping):
-            raise ValueError("media_id_overrides 必须是映射")
-        result: dict[int, int] = {}
-        for raw_subject_id, raw_media_id in value.items():
-            if isinstance(raw_subject_id, bool) or isinstance(raw_media_id, bool):
-                raise ValueError("media_id_overrides 的 ID 必须是正整数")
-            try:
-                subject_id = int(raw_subject_id)
-            except (TypeError, ValueError) as error:
-                raise ValueError(
-                    "media_id_overrides 的 subject ID 必须是正整数"
-                ) from error
-            if (
-                subject_id <= 0
-                or not isinstance(raw_media_id, int)
-                or raw_media_id <= 0
-            ):
-                raise ValueError("media_id_overrides 的 ID 必须是正整数")
-            result[subject_id] = raw_media_id
-        return result
+    settings = parse_settings(ctx.config)
+    runtime = build_runtime(
+        settings=settings,
+        data_dir=Path(ctx.data_root),
+        credentials=ctx.require(CREDENTIALS),
+        timers=ctx.require(TIMERS),
+        ctx=ctx,
+    )
+    await ctx.require(INSTALLED_ASSETS).register(ctx, "skills", "skills")
+    await _register_tool_catalog(ctx, runtime.catalog())
+    await _register_refresh_lifecycle(ctx, runtime)
+    await _register_alert_bridge(ctx, runtime)
 
 
-class BangumiConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+async def _register_alert_bridge(
+    ctx: PluginContext,
+    runtime: BangumiRuntime,
+) -> None:
+    """eventmail 可用时登记告警桥；缺失时只保留本地抓取与手动工具。
 
-    access_token: SecretStr | None = None
-    user_agent: str = Field(default=DEFAULT_USER_AGENT, min_length=1)
-    anime_push: AnimePushConfig = Field(default_factory=AnimePushConfig)
+    与刷新循环不同，这里不按 ``anime_push.enabled`` 提前返回：已有 pending
+    事件仍应能被投递，桥本身不产生外部工作。
+    """
+
+    async def apply_alert_bridge(child: PluginContext) -> None:
+        _ = await runtime.deploy_alert_bridge(child)
+
+    _ = await ctx.inject(
+        (ALERT_SOURCE, CONTEXT_SOURCE),
+        apply_alert_bridge,
+        name="bangumi-alert-bridge",
+    )
 
 
-class BangumiPlugin(Plugin):
-    api_version = 2
-    name = "bangumi"
-    version = "0.5.0"
-    desc = "查询 Bangumi 收藏与观看进度，并主动提醒在看动画的计划放送"
-    author = "lfegg"
-    ConfigModel = BangumiConfig
+async def _register_refresh_lifecycle(
+    ctx: PluginContext,
+    runtime: BangumiRuntime,
+) -> None:
+    """只在正式运行期启动后台刷新；candidate 校验期零调度。"""
 
-    @classmethod
-    def skill_roots(cls) -> tuple[str, ...]:
-        return ("skills",)
+    if not runtime.background_refresh_enabled:
+        return
+    _ = await ctx.on(
+        RUNTIME_STARTED,
+        lambda _event: runtime.start_background_refresh(),
+    )
+    _ = await ctx.on(
+        RUNTIME_STOPPING,
+        lambda _event: runtime.stop_background_refresh(),
+    )
 
-    @classmethod
-    def mcp_servers(cls) -> list[McpServerSpec]:
-        return [
-            McpServerSpec(
-                name="bangumi",
-                command=("python", "mcp/run_mcp.py"),
-            )
-        ]
 
-    def proactive_sources(self) -> list[ProactiveSourceSpec]:
-        config = self.context.config
-        if not isinstance(config, BangumiConfig) or not config.anime_push.enabled:
-            return []
-        return [
-            ProactiveSourceSpec(
-                id="anime_updates",
-                channels=("alert",),
-                server="bangumi",
-                fetch_tool="get_anime_update_alerts",
-                ack_tool="acknowledge_anime_update_alerts",
-                fetch_page_size=50,
-            )
-        ]
+async def _register_tool_catalog(
+    ctx: PluginContext,
+    catalog: ToolCatalog,
+) -> None:
+    """把一个目录注册成宿主工具；每个条目固定自己的发现合同。"""
+
+    tools = ctx.require(TOOLS)
+    _ = await tools.declare_group(ctx, always_on=True, description=desc)
+    for entry in catalog.entries:
+        _ = await tools.register(
+            ctx,
+            name=entry.name,
+            description=entry.description,
+            parameters=entry.parameters,
+            open=_BoundBangumiTool(entry).open,
+            idempotent=entry.idempotent,
+            parallel=entry.parallel,
+        )
+
+
+class _BoundBangumiTool:
+    """一次工具 binding 的窄实现；执行时在凭据租约内调用运行时。"""
+
+    def __init__(self, entry: ToolEntry) -> None:
+        self._entry = entry
+
+    @property
+    def idempotent(self) -> bool:
+        return self._entry.idempotent
+
+    @asynccontextmanager
+    async def open(
+        self,
+        state: Mapping[str, object],
+    ) -> AsyncIterator[BoundTool]:
+        del state
+        yield self
+
+    async def prepare(
+        self,
+        arguments: Mapping[str, object],
+        source: CallSource | None = None,
+    ) -> Mapping[str, object]:
+        del source
+        return arguments
+
+    async def invoke(self, key: str, arguments: Mapping[str, object]) -> ToolResult:
+        del key
+        return await self._entry.execute(arguments)
+
+    async def query(self, key: str) -> ToolResult | None:
+        del key
+        return None
+
+
+__all__ = ["api_version", "apply", "desc", "inject", "name", "version"]

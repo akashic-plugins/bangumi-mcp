@@ -1,3 +1,8 @@
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
+
+[tool.ruff]
+# 只检查本仓库源码。CI 会把宿主 checkout 到 .cache/ 下，那里不是本仓库的代码，
+# 它的 2400+ 条风格告警与本插件无关（真机 CI 曾因此在 lint 步骤失败）。
+extend-exclude = [".cache", ".venv", ".venv-test"]

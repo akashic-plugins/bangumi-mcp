@@ -1,9 +1,49 @@
 # 追更放送提醒（主动推送）设计
 
-- 状态：Implemented（修订 5）
-- 目标版本：`0.5.0`
-- 日期：2026-08-08
-- 依据：[Bangumi 官方 API](https://bangumi.github.io/api/)、[AniList API](https://docs.anilist.co/)、Akashic `create-proactive-source` skill、`proactive_v2` 实现
+- 状态：**已由 V3 支持**（修订 7）。抓取与投递均已迁移；投递经 `eventmail` 告警邮箱交由 `wake` 插件完成。
+- 目标版本：`0.6.0`
+- 日期：2026-09-16（V3 投递修订）
+- 依据：[Bangumi 官方 API](https://bangumi.github.io/api/)、[AniList API](https://docs.anilist.co/)、Akashic `eventmail` 告警/上下文邮箱与 `wake` 插件
+
+> **V3 投递实现（2026-09-16）**
+>
+> 早先版本认为上游没有可用的主动信息源能力；这个判断是错的。真正的扩展点不在
+> `agent/plugin_composition` 的导出里，而在第一方 `eventmail` 插件提供的公开服务：
+>
+> - `eventmail.alert_source.v2`：`await bind(source_id).report(...)`
+>   上报告警，`status(event_id)` 读投递终态（`pending` / `selected` / `delivered` /
+>   `skipped` / `expired`）；
+> - `eventmail.context_source.v2`：同签名上报只读上下文材料。
+>
+> v2 相对 v1 的三处变化：`report` / `status` 改为 async；binding 新增 `close()`
+> 释放 `source_id` 所有权；同一 `source_id` 释放前不可重复绑定。
+> 详见 [插件契约刷新](plugin-contract-refresh.md) 4.5。
+>
+> **为什么必须两个通道都用**：`wake` 的 alert 阶段只把
+> `Request.alert_ref`（`source_id` / `event_id` / `mail_id` 三个标识）放进上下文，
+> 告警 payload 本身**不渲染**；模型能看到的是
+> `active_context()` 返回的 `context_events`，其 payload 原样进提示词。
+> 只报 Alert 会让模型看不到标题与放送时间，只能写空泛提醒。
+>
+> 因此本插件对同一个 `event_id` **同时**上报：`Context` 承载事实（供模型写正文），
+> `Alert` 只当“到点了”的触发器。
+>
+> ```text
+> Bangumi 刷新循环（catalog / schedule / due）
+>   ├─ report_context(payload=标题/集数/放送时刻/来源, expires_at=now+24h)
+>   └─ report_alert(event_id 同上)
+>         └─► wake owner="alert" ──► share_alert(message) ──► delivery ──► 用户
+> ```
+>
+> 本地 `anime_updates.db` 仍是插件自己的真相源；邮箱只负责投递。`wake` 的
+> `Alert.status` 进入终态后，插件把对应事件从本地 pending 队列确认掉。
+>
+> **部署前提**：`wake` 的 `delivery` 必须配置（channel / recipient / session），
+> 否则 `capture()` 对 `owner="alert"` 直接返回 `None`，告警只会留在邮箱里。
+> `eventmail` 缺席时插件自动降级为纯本地抓取 + 手动工具。
+>
+> 下文中依赖旧 `proactive_v2` / MCP lifespan 的投递描述已被本节取代；
+> 领域事实（AniList 精度边界、章节映射、去重、SQLite 状态）仍然有效。
 
 ## 1. 问题和用户意图
 

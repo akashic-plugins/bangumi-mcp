@@ -2,17 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.server import create_mcp_server
-
+from tests._catalog import discovery_catalog
 
 REPO = Path(__file__).resolve().parents[1]
+CATALOG = discovery_catalog()
 
 
-def test_mcp_registers_collection_list_tool(tmp_path: Path) -> None:
-    server = create_mcp_server(tmp_path)
-
-    tools = server._tool_manager.list_tools()
-    names = {tool.name for tool in tools}
+def test_catalog_lists_collection_list_tool_family() -> None:
+    names = set(CATALOG.names)
 
     assert names == {
         "commit_prepared_update",
@@ -27,8 +24,12 @@ def test_mcp_registers_collection_list_tool(tmp_path: Path) -> None:
         "prepare_collection_query",
         "prepare_collection_status_update",
     }
-    schema = next(tool.parameters for tool in tools if tool.name == "list_collections")
+
+
+def test_list_collections_parameters_exclude_paging_knobs() -> None:
+    schema = CATALOG["list_collections"].parameters
     properties = schema["properties"]
+
     assert "limit" not in properties
     assert "offset" not in properties
     assert properties["subject_type"]["enum"] == [
@@ -47,14 +48,18 @@ def test_mcp_registers_collection_list_tool(tmp_path: Path) -> None:
         "on_hold",
         "dropped",
     ]
-    continue_schema = next(
-        tool.parameters for tool in tools if tool.name == "continue_collection_query"
-    )
-    assert set(continue_schema["properties"]) == {"query_id"}
-    prepare_schema = next(
-        tool.parameters for tool in tools if tool.name == "prepare_collection_query"
-    )
-    assert set(prepare_schema["properties"]) == {
+
+
+def test_continue_collection_query_parameters_are_opaque() -> None:
+    schema = CATALOG["continue_collection_query"].parameters
+
+    assert set(schema["properties"]) == {"query_id"}
+
+
+def test_prepare_collection_query_parameters() -> None:
+    schema = CATALOG["prepare_collection_query"].parameters
+
+    assert set(schema["properties"]) == {
         "subject_type",
         "status",
         "operation",
@@ -63,28 +68,28 @@ def test_mcp_registers_collection_list_tool(tmp_path: Path) -> None:
         "requested_count",
         "return_all_matches",
     }
-    execute_schema = next(
-        tool.parameters
-        for tool in tools
-        if tool.name == "execute_prepared_collection_query"
-    )
-    assert set(execute_schema["properties"]) == {
+
+
+def test_execute_prepared_collection_query_parameters() -> None:
+    schema = CATALOG["execute_prepared_collection_query"].parameters
+
+    assert set(schema["properties"]) == {
         "confirmation_id",
         "confirmation_text",
     }
-    count_schema = next(
-        tool.parameters for tool in tools if tool.name == "count_collections"
-    )
-    assert set(count_schema["properties"]) == {"subject_type", "status"}
-    fetch_schema = next(
-        tool.parameters for tool in tools if tool.name == "get_anime_update_alerts"
-    )
+
+
+def test_count_collections_parameters() -> None:
+    schema = CATALOG["count_collections"].parameters
+
+    assert set(schema["properties"]) == {"subject_type", "status"}
+
+
+def test_alert_parameters() -> None:
+    fetch_schema = CATALOG["get_anime_update_alerts"].parameters
     assert set(fetch_schema["properties"]) == {"offset", "limit"}
-    ack_schema = next(
-        tool.parameters
-        for tool in tools
-        if tool.name == "acknowledge_anime_update_alerts"
-    )
+
+    ack_schema = CATALOG["acknowledge_anime_update_alerts"].parameters
     assert set(ack_schema["properties"]) == {"event_ids", "feedback"}
 
 
@@ -106,4 +111,4 @@ def test_skill_preserves_collection_list_boundaries() -> None:
     assert "prepare 和 execute 禁止在同一轮调用" in skill
     assert "计划放送" in skill
     assert "不能说某个流媒体" in skill
-    assert "不得为了查询、重放、跳过或修改提醒而手动调用" in skill
+    assert "插件已记录事件" in skill

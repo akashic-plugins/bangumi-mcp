@@ -20,8 +20,7 @@ from zoneinfo import ZoneInfo
 
 from .anilist import AniListApiError, AniListNotFoundError
 from .client import BangumiApiError
-from .config import AnimePushRuntimeConfig
-
+from .settings import AnimePushSettings
 
 logger = logging.getLogger(__name__)
 SCHEMA_VERSION = "1"
@@ -775,7 +774,7 @@ class AnimeUpdateCoordinator:
         store: AnimeUpdateStore,
         bangumi: BangumiApi,
         anilist: AniListApi,
-        config: AnimePushRuntimeConfig,
+        config: AnimePushSettings,
         *,
         clock: Callable[[], datetime] | None = None,
         jitter: Callable[[float], float] | None = None,
@@ -968,7 +967,8 @@ class AnimeUpdateCoordinator:
                         schedule["mapping_fingerprint"]
                     ),
                 )
-            except Exception as error:
+            # 单条事件失败要记录并安排重试；漏捕一类异常会让整轮轮询中断。
+            except Exception as error:  # noqa: BLE001 - 逐条隔离并转入重试
                 delay = _retry_delay(
                     error,
                     int(schedule["failure_count"]),
@@ -1070,6 +1070,30 @@ class AnimeUpdateCoordinator:
             raise AnimeMappingError("AniList 自动映射没有唯一严格候选")
         return matches[0], "automatic"
 
+    def next_poll_delay(self, kind: str) -> float:
+        """返回 kind 距离下次轮询的秒数；没有记录时立即轮询。"""
+
+        current_epoch = int(_aware_utc(self._clock()).timestamp())
+        return max(0.0, self.store.poll_next_run_at(kind) - current_epoch)
+
+    async def run_step(self, kind: str) -> float:
+        """执行一次轮询并返回下次间隔；失败时返回退避时间。"""
+
+        methods = {
+            "catalog": self.refresh_catalog,
+            "schedule": self.refresh_schedules,
+            "due": self.evaluate_due,
+        }
+        intervals = {
+            "catalog": CATALOG_INTERVAL_SECONDS,
+            "schedule": SCHEDULE_INTERVAL_SECONDS,
+            "due": DUE_INTERVAL_SECONDS,
+        }
+        method = methods.get(kind)
+        if method is None:
+            raise ValueError(f"未知轮询类型: {kind}")
+        return await self._run_step(kind, method, intervals[kind])
+
     async def _run_step(
         self,
         kind: str,
@@ -1078,7 +1102,8 @@ class AnimeUpdateCoordinator:
     ) -> float:
         try:
             await _run_sync_to_completion(method)
-        except Exception as error:
+        # 轮询步骤的任何异常都转成「失败并安排下次重试」，不允许冒泡终止循环。
+        except Exception as error:  # noqa: BLE001 - 异常即失败事实
             now = _aware_utc(self._clock())
             delay = _retry_delay(
                 error,
@@ -1368,12 +1393,12 @@ def _error_code(error: BaseException) -> str:
 
 def _validate_event_ids(event_ids: list[str]) -> list[str]:
     if not isinstance(event_ids, list):
-        raise ValueError("event_ids 必须是数组")
+        raise TypeError("event_ids 必须是数组")
     result: list[str] = []
     seen: set[str] = set()
     for value in event_ids:
         if not isinstance(value, str):
-            raise ValueError("event_id 必须是字符串")
+            raise TypeError("event_id 必须是字符串")
         clean = value.strip()
         prefix, separator, suffix = clean.partition(":")
         if prefix != "episode" or separator != ":" or not suffix.isdigit():
@@ -1445,7 +1470,7 @@ def _bounded_int(
     maximum: int | None = None,
 ) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"{label} 必须是整数")
+        raise TypeError(f"{label} 必须是整数")
     if value < minimum or (maximum is not None and value > maximum):
         raise ValueError(f"{label} 超出允许范围")
     return value

@@ -2,8 +2,11 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .venv/
+.venv-test/
+.DS_Store
 config.local.toml
 .env
 .env.*
 tokens*.json
 *.log
+.cache/

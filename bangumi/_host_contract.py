@@ -1,0 +1,352 @@
+"""Bangumi 插件使用的宿主结构合同。
+
+本模块只描述本插件实际依赖的窄接口，不 import 宿主实现，也不 import 兄弟插件。
+运行时 ServiceKey 由同名 key 的动态绑定识别，因此这里声明的 key 名必须与宿主一致：
+
+- ``tools.v1``：``plugins.tools`` 提供的工具目录 owner。
+- ``core.installed_assets.v1``：``assets`` provider 提供的固定代码资产注册表。
+
+只有宿主 SDK 不可用时才回退到最小 key 容器；离线测试用这个回退加载 plugin.py，
+不需要伪造 `agent` 包。真实运行时始终走宿主的 ``ServiceKey``。
+"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Callable, Mapping
+from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Generic, Literal, Protocol, TypeVar
+
+try:  # 宿主运行时提供。
+    from agent.plugin_composition import Context, CredentialRef, Effect, ServiceKey
+except ModuleNotFoundError:  # pragma: no cover - 只在没有宿主 SDK 的离线环境触发
+    _T = TypeVar("_T")
+
+    class ServiceKey(Generic[_T]):  # type: ignore[no-redef]
+        """离线回退：只保留宿主真实 key 的字符串身份。"""
+
+        __slots__ = ("name",)
+
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def __repr__(self) -> str:
+            return f"ServiceKey({self.name!r})"
+
+        def __eq__(self, other: object) -> bool:
+            return isinstance(other, ServiceKey) and other.name == self.name
+
+        def __hash__(self) -> int:
+            return hash(self.name)
+
+    class Context(Protocol):  # type: ignore[no-redef]
+        """离线 fallback：只用于类型标注，不做静态检查。"""
+
+    class Effect(Protocol):  # type: ignore[no-redef]
+        """离线 fallback：只用于类型标注，不做静态检查。"""
+
+    @dataclass(frozen=True, slots=True)
+    class CredentialRef:  # type: ignore[no-redef]
+        """离线回退：与宿主的不可变凭据引用结构一致。"""
+
+        path: tuple[str, ...]
+
+
+TOOLS_SERVICE_NAME = "tools.v1"
+INSTALLED_ASSETS_SERVICE_NAME = "assets.installed.v1"
+CREDENTIALS_SERVICE_NAME = "core.credentials"
+TIMERS_SERVICE_NAME = "timers.v1"
+
+Outcome = Literal["success", "denied", "error", "interrupted"]
+
+_TOOL_NAME = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+
+
+class ContentPart(Protocol):
+    """工具结果正文片段；宿主按 ``type`` 解释。"""
+
+    @property
+    def type(self) -> str: ...
+
+    @property
+    def text(self) -> str: ...
+
+
+class ToolResult(Protocol):
+    """工具 owner 接受的最小结果结构。"""
+
+    @property
+    def outcome(self) -> Literal["success", "denied", "error", "interrupted"]: ...
+
+    @property
+    def parts(self) -> tuple[ContentPart, ...]: ...
+
+
+class CallSource(Protocol):
+    """已提交调用的只读来源；工具不取得任意 MessageLog。"""
+
+    @property
+    def call_ref(self) -> object: ...
+
+    @property
+    def messages(self) -> tuple[object, ...]: ...
+
+
+class BoundTool(Protocol):
+    """一次工具 binding 的窄执行接口。"""
+
+    @property
+    def idempotent(self) -> bool: ...
+
+    async def prepare(
+        self,
+        arguments: Mapping[str, object],
+        source: CallSource | None = None,
+    ) -> Mapping[str, object] | str: ...
+
+    async def invoke(self, key: str, arguments: Mapping[str, object]) -> ToolResult: ...
+
+    async def query(self, key: str) -> ToolResult | None: ...
+
+
+class ToolRef(Protocol):
+    """工具 owner 发布的不可变发现引用。"""
+
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def description(self) -> Mapping[str, object]: ...
+
+
+class ToolView(Protocol):
+    """已授予的一组工具引用。"""
+
+    @property
+    def refs(self) -> tuple[ToolRef, ...]: ...
+
+
+OpenTool = Callable[[Mapping[str, object]], AbstractAsyncContextManager[BoundTool]]
+Capture = Callable[[Mapping[str, object]], Mapping[str, object]]
+
+
+class ToolCatalogService(Protocol):
+    """``tools.v1`` 的注册与 binding 入口。"""
+
+    async def declare_group(
+        self,
+        ctx: Context,
+        *,
+        always_on: bool = False,
+        description: str = "未声明用途",
+    ) -> Effect: ...
+
+    async def register(
+        self,
+        ctx: Context,
+        *,
+        name: str,
+        description: str,
+        parameters: Mapping[str, object],
+        open: OpenTool,
+        capture: Capture | None = None,
+        public: bool = True,
+        idempotent: bool = False,
+        parallel: bool = False,
+        exclusive_batch: bool = False,
+        release: object = None,
+    ) -> ToolRef: ...
+
+    def view(self, *refs: ToolRef) -> ToolView: ...
+
+
+class InstalledAsset(Protocol):
+    """一个已登记的固定代码资产集合。"""
+
+    @property
+    def owner_id(self) -> str: ...
+
+    @property
+    def category(self) -> str: ...
+
+    @property
+    def root_dir(self) -> object: ...
+
+
+class InstalledAssets(Protocol):
+    """``core.installed_assets.v1`` 的只读目录与登记入口。"""
+
+    def __call__(self) -> tuple[InstalledAsset, ...]: ...
+
+    async def register(
+        self,
+        ctx: Context,
+        category: str,
+        relative_path: str,
+    ) -> Effect: ...
+
+
+class ProviderClient(Protocol):
+    """一次已授权的凭据租约；``credential`` 只读取本次授权内的值。"""
+
+    def credential(self, ref: CredentialRef) -> str: ...
+
+    async def aclose(self) -> None: ...
+
+
+class CredentialClients(Protocol):
+    """``core.credentials`` 的短租约入口。"""
+
+    async def create(
+        self,
+        ctx: Context,
+        refs: Mapping[str, CredentialRef],
+    ) -> ProviderClient: ...
+
+    def open(
+        self,
+        ctx: Context,
+        refs: Mapping[str, CredentialRef],
+    ) -> AbstractAsyncContextManager[ProviderClient]: ...
+
+
+class TimerHandle(Protocol):
+    """一次一次性定时等待。"""
+
+    async def result(self) -> object: ...
+
+    async def cancel(self) -> object: ...
+
+    async def cleanup(self) -> None: ...
+
+
+class PluginTimers(Protocol):
+    """``core.timers`` 的一次性定时入口；candidate 期登记会失败。"""
+
+    def schedule(self, deadline: datetime) -> TimerHandle: ...
+
+
+class BoundAlertSource(Protocol):
+    """``eventmail.alert_source.v2``：上报告警并查询投递终态。
+
+    v2 的两个变化：``report`` / ``status`` 是 async；新增 ``close()`` 释放
+    ``source_id`` 所有权，不调用会让下一次装载直接报「已有 owner」。
+    """
+
+    async def report(
+        self,
+        *,
+        event_id: str,
+        payload: Mapping[str, object],
+        observed_at: datetime,
+        expires_at: datetime | None = None,
+    ) -> Mapping[str, object]: ...
+
+    async def status(self, *, event_id: str) -> str | None: ...
+
+    def close(self) -> None: ...
+
+
+class AlertSourceServices(Protocol):
+    def bind(self, source_id: str) -> BoundAlertSource: ...
+
+
+class BoundContextSource(Protocol):
+    """``eventmail.context_source.v2``：上报只读上下文材料。
+
+    这是告警正文进入 Wake 提示词的唯一通道：``active_context`` 会把 payload
+    原样渲染进 ``context_events``。与 AlertSource 一样是 async 且需要 ``close()``。
+    """
+
+    async def report(
+        self,
+        *,
+        event_id: str,
+        payload: Mapping[str, object],
+        observed_at: datetime,
+        expires_at: datetime | None = None,
+    ) -> Mapping[str, object]: ...
+
+    def close(self) -> None: ...
+
+
+class ContextSourceServices(Protocol):
+    def bind(self, source_id: str) -> BoundContextSource: ...
+
+
+class PluginContext(Protocol):
+    """本插件使用的 Context 窄面：ServiceKey 读取与生命周期监听。"""
+
+    @property
+    def config(self) -> Mapping[str, object]: ...
+
+    @property
+    def data_root(self) -> object: ...
+
+    def require(self, key: object) -> object: ...
+
+    async def on(self, key: object, listener: object) -> Effect: ...
+
+
+TOOLS = ServiceKey[ToolCatalogService](TOOLS_SERVICE_NAME)
+INSTALLED_ASSETS = ServiceKey[InstalledAssets](INSTALLED_ASSETS_SERVICE_NAME)
+CREDENTIALS = ServiceKey[CredentialClients](CREDENTIALS_SERVICE_NAME)
+TIMERS = ServiceKey[PluginTimers](TIMERS_SERVICE_NAME)
+
+# eventmail 是第一方插件提供的告警/上下文邮箱；外部插件通过它的公开 key 接入。
+ALERT_SOURCE = ServiceKey[AlertSourceServices]("eventmail.alert_source.v2")
+CONTEXT_SOURCE = ServiceKey[ContextSourceServices](
+    "eventmail.context_source.v2"
+)
+
+
+def tool_name_error(name: object) -> str | None:
+    """返回工具名不合法的原因，合法时返回 ``None``。"""
+
+    if not isinstance(name, str):
+        return "工具名必须是字符串"
+    if _TOOL_NAME.fullmatch(name) is None:
+        return "工具名必须匹配 ^[a-z][a-z0-9_]{0,63}$"
+    return None
+
+
+__all__ = [
+    "ALERT_SOURCE",
+    "CONTEXT_SOURCE",
+    "CREDENTIALS",
+    "CREDENTIALS_SERVICE_NAME",
+    "INSTALLED_ASSETS",
+    "INSTALLED_ASSETS_SERVICE_NAME",
+    "TIMERS",
+    "TIMERS_SERVICE_NAME",
+    "TOOLS",
+    "TOOLS_SERVICE_NAME",
+    "AlertSourceServices",
+    "BoundAlertSource",
+    "BoundContextSource",
+    "BoundTool",
+    "CallSource",
+    "Capture",
+    "ContentPart",
+    "Context",
+    "ContextSourceServices",
+    "CredentialClients",
+    "CredentialRef",
+    "Effect",
+    "InstalledAsset",
+    "InstalledAssets",
+    "OpenTool",
+    "Outcome",
+    "PluginContext",
+    "PluginTimers",
+    "ProviderClient",
+    "ServiceKey",
+    "TimerHandle",
+    "ToolCatalogService",
+    "ToolRef",
+    "ToolResult",
+    "ToolView",
+    "tool_name_error",
+]

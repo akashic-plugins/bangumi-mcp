@@ -4,10 +4,12 @@ from copy import deepcopy
 from typing import Any
 
 import pytest
-
-from src.client import BangumiApiError
-from src.confirmation import ConfirmationError, ConfirmationStore
-from src.service import BangumiInputError, BangumiService
+from bangumi_test_plugin.bangumi.client import BangumiApiError
+from bangumi_test_plugin.bangumi.confirmation import (
+    ConfirmationError,
+    ConfirmationStore,
+)
+from bangumi_test_plugin.bangumi.service import BangumiInputError, BangumiService
 
 
 def episode(number: int, status: int, *, episode_id: int | None = None) -> dict[str, Any]:
