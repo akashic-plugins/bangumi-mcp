@@ -68,6 +68,7 @@ class BangumiRuntime:
     credentials: CredentialProvider | None = None
     timers: PluginTimersPort | None = None
     ctx: object | None = None
+    _client: BangumiClient | None = field(default=None, init=False, repr=False)
     _service: BangumiService | None = field(default=None, init=False, repr=False)
     _store: object | None = field(default=None, init=False, repr=False)
     _lease: object | None = field(default=None, init=False, repr=False)
@@ -88,21 +89,31 @@ class BangumiRuntime:
 
     def _bangumi(self) -> BangumiService:
         if self._service is None:
-            from .client import BangumiClient
-
-            client: BangumiClient = BangumiClient(
-                BangumiRuntimeConfig(
-                    token_provider=lambda: self._token("access_token"),
-                    user_agent=self.settings.user_agent,
-                )
-            )
             self._service = BangumiService(
-                client,
+                self._bangumi_client(),
                 ConfirmationStore(),
                 QueryConfirmationStore(),
                 CollectionQuerySessionStore(),
             )
         return self._service
+
+    def _bangumi_client(self) -> BangumiClient:
+        """后台刷新直接使用 client：它提供 get_me / get_subject 等底层读取。
+
+        ``BangumiService`` 只有面向工具的高层方法，没有这些接口；协调器此前
+        被传入 service，导致 ``refresh_catalog`` 抛 AttributeError 后静默失败。
+        """
+
+        if self._client is None:
+            from .client import BangumiClient
+
+            self._client = BangumiClient(
+                BangumiRuntimeConfig(
+                    token_provider=lambda: self._token("access_token"),
+                    user_agent=self.settings.user_agent,
+                )
+            )
+        return self._client
 
     def list_collections(
         self,
@@ -257,7 +268,7 @@ class BangumiRuntime:
 
         return AnimeUpdateCoordinator(
             self._anime_store(),  # type: ignore[arg-type]
-            self._bangumi(),
+            self._bangumi_client(),
             AniListClient(
                 user_agent=self.settings.user_agent,
                 token_provider=lambda: self._token("anilist_token"),

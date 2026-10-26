@@ -277,7 +277,13 @@ class ContextSourceServices(Protocol):
 
 
 class PluginContext(Protocol):
-    """本插件使用的 Context 窄面：ServiceKey 读取与生命周期监听。"""
+    """本插件使用的 Context 窄面：ServiceKey 读取、生命周期监听与子 Fiber 挂载。
+
+    ``inject`` 与 ``effect`` 是 ``plugin.py`` / ``runtime.py`` 的实际依赖：
+    告警桥挂在 eventmail 可选子 Fiber 上（``inject``），binding 的 ``close``
+    登记成同 Fiber 的 Effect（``effect``）。窄面必须显式声明，否则读代码或
+    静态检查会以为这两个入口不存在。
+    """
 
     @property
     def config(self) -> Mapping[str, object]: ...
@@ -288,6 +294,16 @@ class PluginContext(Protocol):
     def require(self, key: object) -> object: ...
 
     async def on(self, key: object, listener: object) -> Effect: ...
+
+    async def inject(
+        self,
+        dependencies: object,
+        apply: object,
+        *,
+        name: str | None = None,
+    ) -> object: ...
+
+    async def effect(self, body: object, *, label: str | None = None) -> Effect: ...
 
 
 TOOLS = ServiceKey[ToolCatalogService](TOOLS_SERVICE_NAME)

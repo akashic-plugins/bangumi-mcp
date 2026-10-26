@@ -6,11 +6,12 @@ REPO = Path(__file__).resolve().parents[1]
 
 
 def test_repository_contains_no_token_assignment_outside_tests() -> None:
+    # 虚拟环境与 CI 检出目录里是第三方代码，不参与本仓库的凭据扫描。
+    skip_parts = {".git", "tests", ".venv", ".venv-test", ".cache", "node_modules"}
     for path in REPO.rglob("*"):
         if (
             not path.is_file()
-            or ".git" in path.parts
-            or "tests" in path.parts
+            or skip_parts & set(path.parts)
         ):
             continue
         if path.suffix not in {".py", ".md", ".toml", ".yaml", ".yml"}:
