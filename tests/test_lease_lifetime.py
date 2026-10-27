@@ -178,3 +178,49 @@ def test_concurrent_calls_keep_their_own_lease(
     failures = [item for item in results if isinstance(item, BaseException)]
     assert failures == [], f"并发调用互相踩租约: {failures[:2]}"
     assert all(value == "secret-token" for value in results)
+
+
+def test_business_error_does_not_discard_background_lease(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """业务异常也继承 RuntimeError，不能被当成「租约已失效」。
+
+    真实事故：网络超时（BangumiApiError）被重试逻辑误判，后台租约被清空，
+    此后所有调用都报「凭据租约不可用」。
+    """
+
+    from bangumi.client import BangumiApiError
+
+    runtime, credentials = _runtime_with_background_lease(tmp_path, monkeypatch)
+    lease = _new_lease(credentials)
+    runtime._background_lease = lease
+
+    def explode() -> None:
+        raise BangumiApiError("模拟网络超时")
+
+    with pytest.raises(BangumiApiError):
+        asyncio.run(runtime._run_in_lease(explode))
+
+    assert runtime._background_lease is lease, "业务异常不能丢弃后台租约"
+    assert lease.closed is False
+
+
+def test_dead_lease_is_rebuilt_before_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """租约真失效时先解绑上下文再重试，否则重试仍读到死租约。"""
+
+    runtime, credentials = _runtime_with_background_lease(tmp_path, monkeypatch)
+    stale = _new_lease(credentials)
+    stale.closed = True
+    runtime._background_lease = stale
+
+    def read_token() -> str:
+        return runtime._token("access_token")
+
+    value = asyncio.run(runtime._run_in_lease(read_token))
+
+    assert value == "secret-token"
+    assert runtime._background_lease is not stale
