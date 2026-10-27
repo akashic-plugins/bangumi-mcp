@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,6 +45,10 @@ CollectionTargetStatus = Literal["watching", "completed"]
 
 T = TypeVar("T")
 
+# 调用内租约必须随执行上下文隔离：`asyncio.to_thread` 会继承创建时的
+# contextvars 副本，所以并发调用各自看到自己的租约，不会互相覆盖。
+_CALL_LEASE: ContextVar[object | None] = ContextVar("bangumi_call_lease", default=None)
+
 
 class CredentialProvider(Protocol):
     """宿主凭据短租约：只解析本插件固定输入里出现的引用。"""
@@ -71,7 +76,6 @@ class BangumiRuntime:
     _client: BangumiClient | None = field(default=None, init=False, repr=False)
     _service: BangumiService | None = field(default=None, init=False, repr=False)
     _store: object | None = field(default=None, init=False, repr=False)
-    _lease: object | None = field(default=None, init=False, repr=False)
     _background_lease: object | None = field(default=None, init=False, repr=False)
     _loop: AnimeUpdateLoop | None = field(default=None, init=False, repr=False)
     _bridge: BangumiAlertBridge | None = field(default=None, init=False, repr=False)
@@ -340,23 +344,47 @@ class BangumiRuntime:
             return tool_error(_error_text(error))
         return tool_success(payload)
 
-    async def _run_in_lease(self, work: Callable[[], T]) -> T:
-        lease = await self._open_lease()
+    async def _run_in_lease(
+        self,
+        work: Callable[[], T],
+        *,
+        allow_retry: bool = True,
+    ) -> T:
+        """在凭据租约内执行同步工作。
+
+        调用自己打开的租约必须自己关闭；后台长期租约是共享资源，不能在这里
+        ``aclose``，否则一次工具调用就会让后续所有调用（含后台刷新）永久失败。
+        """
+
+        lease, owned = await self._open_lease()
         if lease is None:
             return await asyncio.to_thread(work)
-        self._lease = lease
+        token = _CALL_LEASE.set(lease)
         try:
             return await asyncio.to_thread(work)
+        except RuntimeError:
+            # 后台租约可能在持有期间被宿主换代关闭（remove_factory -> aclose）。
+            # 只对借用的租约重建一次；自己开的租约失败就是真失败。
+            if not allow_retry or owned or self._background_lease is None:
+                raise
+            self._background_lease = None
+            return await self._run_in_lease(work, allow_retry=False)
         finally:
-            self._lease = None
-            closer = getattr(lease, "aclose", None)
-            if callable(closer):
-                await closer()
+            _CALL_LEASE.reset(token)
+            if owned:
+                closer = getattr(lease, "aclose", None)
+                if callable(closer):
+                    await closer()
 
-    async def _open_lease(self) -> object | None:
+    async def _open_lease(self) -> tuple[object | None, bool]:
+        """返回 ``(租约, 是否由本次调用独占)``。
+
+        后台租约只借用、不关闭；临时租约由调用方负责关闭。
+        """
+
         if self._background_lease is not None:
-            return self._background_lease
-        return await self._enter_lease()
+            return self._background_lease, False
+        return await self._enter_lease(), True
 
     async def _enter_lease(self) -> object | None:
         if self.credentials is None or self.ctx is None:
@@ -371,7 +399,7 @@ class BangumiRuntime:
         return await manager.__aenter__()
 
     def _token(self, alias: CredentialAlias) -> str:
-        lease = self._lease if self._lease is not None else self._background_lease
+        lease = _CALL_LEASE.get() or self._background_lease
         if lease is None:
             raise ToolExecutionError("Bangumi 凭据租约不可用")
         lease_port: CredentialLease = lease  # type: ignore[assignment]
