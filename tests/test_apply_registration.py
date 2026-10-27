@@ -113,9 +113,13 @@ class _Lease:
         self.closed = False
 
     def credential(self, ref: CredentialRef) -> str:
+        # 与宿主 CoreProviderClient 一致：关闭后再读凭据必须报错。
+        if self.closed:
+            raise RuntimeError("provider credential client 已关闭")
         return self._values[ref.path[0]]
 
     async def aclose(self) -> None:
+        self._values.clear()
         self.closed = True
 
 
