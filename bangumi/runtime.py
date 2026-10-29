@@ -360,21 +360,42 @@ class BangumiRuntime:
         if lease is None:
             return await asyncio.to_thread(work)
         token = _CALL_LEASE.set(lease)
+        released = False
         try:
             return await asyncio.to_thread(work)
         except RuntimeError:
-            # 后台租约可能在持有期间被宿主换代关闭（remove_factory -> aclose）。
-            # 只对借用的租约重建一次；自己开的租约失败就是真失败。
-            if not allow_retry or owned or self._background_lease is None:
+            # 业务异常（BangumiApiError / AniListApiError / AnimeMappingError 等）
+            # 也都继承 RuntimeError，不能靠异常类型判断租约是否失效，否则一次网络
+            # 抖动就会误清后台租约。这里只探测「租约还能不能读出凭据」。
+            if not allow_retry or owned or not self._lease_is_dead(lease):
                 raise
+            # 重试发生在 finally 之前，必须先撤掉本层的上下文绑定，
+            # 否则 _token() 仍会读到刚判定失效的租约。
+            _CALL_LEASE.reset(token)
+            released = True
             self._background_lease = None
             return await self._run_in_lease(work, allow_retry=False)
         finally:
-            _CALL_LEASE.reset(token)
+            if not released:
+                _CALL_LEASE.reset(token)
             if owned:
                 closer = getattr(lease, "aclose", None)
                 if callable(closer):
                     await closer()
+
+    def _lease_is_dead(self, lease: object) -> bool:
+        """租约是否已被宿主关闭：以能否读出本插件自己的凭据为准。"""
+
+        reader = getattr(lease, "credential", None)
+        if not callable(reader):
+            return False
+        try:
+            _ = reader(self._credential_ref("access_token"))
+        except RuntimeError:
+            return True
+        except Exception:  # noqa: BLE001 - 其它错误不代表租约失效
+            return False
+        return False
 
     async def _open_lease(self) -> tuple[object | None, bool]:
         """返回 ``(租约, 是否由本次调用独占)``。
