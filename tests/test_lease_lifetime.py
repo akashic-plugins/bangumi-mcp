@@ -224,3 +224,28 @@ def test_dead_lease_is_rebuilt_before_retry(
 
     assert value == "secret-token"
     assert runtime._background_lease is not stale
+
+
+def test_enter_lease_keeps_the_context_manager_alive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_enter_lease` 必须持有 context manager，否则 client 一出生就被关闭。
+
+    宿主 ``CredentialClients.open`` 是 ``@asynccontextmanager``，退出时才
+    ``aclose`` client。只取 ``__aenter__`` 而丢弃 manager，生成器被回收时
+    会执行 ``finally`` 里的 ``aclose``，导致拿到的租约已经失效。
+    """
+
+    runtime, _ = _runtime_with_background_lease(tmp_path, monkeypatch)
+
+    async def exercise() -> str:
+        # 必须在同一个事件循环内完成：asyncio.run 收尾时会关闭全部异步生成器。
+        lease = await runtime._enter_lease()
+        assert lease is not None
+        try:
+            return lease.credential(_CONFIG["access_token"])
+        finally:
+            await lease.aclose()
+
+    assert asyncio.run(exercise()) == "secret-token"

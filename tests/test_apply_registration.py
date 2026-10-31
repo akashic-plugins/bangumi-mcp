@@ -141,7 +141,11 @@ class _CredentialServiceRecorder:
 
         @asynccontextmanager
         async def manager() -> AsyncIterator[_Lease]:
-            yield lease
+            # 与宿主 CredentialClients.open 一致：退出上下文时才关闭 client。
+            try:
+                yield lease
+            finally:
+                await lease.aclose()
 
         return manager()
 
