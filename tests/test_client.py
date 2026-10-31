@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
+import requests
 from bangumi_test_plugin.bangumi.client import (
     API_BASE_URL,
     BangumiApiError,
@@ -12,6 +14,13 @@ from bangumi_test_plugin.bangumi.settings import BangumiRuntimeConfig
 
 
 class FakeResponse:
+    """按真实 ``requests.Response`` 建模：payload 为 None 即空 body。
+
+    空 body 时 ``json()`` 必须像真的一样抛 ``JSONDecodeError``——
+    Bangumi 写接口线上实测返回 202 + content-length: 0，
+    不用空 body 建模就测不出「202 被当 JSON 解析」这个 bug。
+    """
+
     def __init__(
         self,
         status_code: int,
@@ -22,8 +31,13 @@ class FakeResponse:
         self.status_code = status_code
         self._payload = payload
         self.headers = headers or {}
+        self.content = (
+            b"" if payload is None else json.dumps(payload).encode("utf-8")
+        )
 
     def json(self) -> object:
+        if not self.content:
+            raise requests.JSONDecodeError("Expecting value", "", 0)
         return self._payload
 
 
@@ -180,6 +194,43 @@ def test_episode_write_uses_explicit_episode_ids() -> None:
         "episode_id": [1001, 1002],
         "type": 2,
     }
+
+
+def test_status_write_accepts_202_with_empty_body() -> None:
+    """线上实测写收藏返回 202 + content-length: 0，必须按成功处理。"""
+
+    session = FakeSession(FakeResponse(202))
+
+    assert client(session).set_collection_type(42, 3) is None
+
+
+def test_episode_write_accepts_202_with_empty_body() -> None:
+    """PATCH .../episodes 同样实测返回 202 空 body。"""
+
+    session = FakeSession(FakeResponse(202))
+
+    assert client(session).set_episode_collections(42, [1001, 1002]) is None
+
+
+def test_status_write_error_still_raises_with_status_code() -> None:
+    """防回归：非 2xx 依然抛 BangumiApiError 并携带 status_code。"""
+
+    session = FakeSession(FakeResponse(400, {"title": "Validation Error"}))
+
+    with pytest.raises(BangumiApiError) as caught:
+        client(session).set_collection_type(42, 3)
+
+    assert caught.value.status_code == 400
+    assert "Validation Error" in str(caught.value)
+
+
+def test_episode_write_error_still_raises_with_status_code() -> None:
+    session = FakeSession(FakeResponse(400, {"title": "Validation Error"}))
+
+    with pytest.raises(BangumiApiError) as caught:
+        client(session).set_episode_collections(42, [1001])
+
+    assert caught.value.status_code == 400
 
 
 def test_episode_collections_are_fully_paginated() -> None:
