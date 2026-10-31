@@ -240,7 +240,8 @@ class BangumiClient:
             "POST",
             f"/v0/users/-/collections/{subject_id}",
             json_body={"type": collection_type},
-            expected_status=(204,),
+            # 规范写 204，但线上实测返回 202（空 body），两个都按成功处理。
+            expected_status=(200, 202, 204),
         )
 
     def set_episode_collections(
@@ -257,7 +258,8 @@ class BangumiClient:
             "PATCH",
             f"/v0/users/-/collections/{subject_id}/episodes",
             json_body={"episode_id": ids, "type": collection_type},
-            expected_status=(204,),
+            # 同 set_collection_type：线上实测返回 202 而非规范里的 204。
+            expected_status=(200, 202, 204),
         )
 
     def _request_json(
@@ -304,7 +306,8 @@ class BangumiClient:
                 status_code=response.status_code,
                 retry_after_seconds=_retry_after_seconds(response),
             )
-        if response.status_code == 204:
+        # 204 无 body；202 线上实测也是空 body（content-length: 0），不能走 JSON 解析。
+        if response.status_code == 204 or not response.content:
             return None
         try:
             return response.json()

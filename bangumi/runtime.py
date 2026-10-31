@@ -64,6 +64,40 @@ class CredentialLease(Protocol):
     def credential(self, ref: CredentialRef) -> str: ...
 
 
+class _LeaseHandle:
+    """一次凭据租约：同时持有 client 与打开它的 context manager。
+
+    宿主 ``CredentialClients.open`` 是 ``@asynccontextmanager``，退出时才
+    ``aclose`` client。如果只取 ``__aenter__`` 而丢弃 manager，函数返回时
+    生成器被回收会立刻执行 ``finally`` 里的 ``aclose``，client 一出生就是
+    关闭状态。因此 manager 必须与 client 一起被持有。
+    """
+
+    __slots__ = ("_client", "_manager")
+
+    def __init__(self, client: object, manager: object) -> None:
+        self._client = client
+        self._manager = manager
+
+    def credential(self, ref: CredentialRef) -> str:
+        reader = getattr(self._client, "credential", None)
+        if not callable(reader):
+            raise ToolExecutionError("凭据租约不可用")
+        value = reader(ref)
+        if not isinstance(value, str):
+            raise ToolExecutionError("凭据内容无效")
+        return value
+
+    async def aclose(self) -> None:
+        exit_ = getattr(self._manager, "__aexit__", None)
+        if callable(exit_):
+            await exit_(None, None, None)
+        else:
+            closer = getattr(self._client, "aclose", None)
+            if callable(closer):
+                await closer()
+
+
 @dataclass
 class BangumiRuntime:
     """一次 ``apply`` 拥有的全部运行状态。"""
@@ -417,7 +451,9 @@ class BangumiRuntime:
         if anilist is not None:
             refs["anilist_token"] = anilist
         manager = self.credentials.open(self.ctx, refs)
-        return await manager.__aenter__()
+        client = await manager.__aenter__()
+        # manager 必须随 client 一起存活；单独丢弃它会让 client 立即被关闭。
+        return _LeaseHandle(client, manager)
 
     def _token(self, alias: CredentialAlias) -> str:
         lease = _CALL_LEASE.get() or self._background_lease
